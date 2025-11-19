@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 
 import sentry_sdk
 import uvicorn
+from cachetools import TTLCache
 from fastapi import Depends, FastAPI
 
 from vllm_router.aiohttp_client import AiohttpClientWrapper
@@ -35,6 +36,7 @@ from vllm_router.routers.files_router import files_router
 from vllm_router.routers.health_router import health_router
 from vllm_router.routers.main_router import main_router
 from vllm_router.routers.metrics_router import metrics_router
+from vllm_router.routers.proxy_router import router as proxy_router
 from vllm_router.routers.routing_logic import (
     cleanup_routing_logic,
     get_routing_logic,
@@ -268,10 +270,14 @@ def initialize_all(app: FastAPI, args):
     app.state.router = get_routing_logic()
     app.state.request_rewriter = get_request_rewriter()
 
+    # Initialize chat cache (maxsize=10000, ttl=1 hour)
+    app.state.chat_cache = TTLCache(maxsize=10000, ttl=3600)
+
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(health_router)
 app.include_router(main_router, dependencies=[Depends(verify_user_access)])
+app.include_router(proxy_router, dependencies=[Depends(verify_user_access)])
 app.include_router(files_router, dependencies=[Depends(verify_user_access)])
 app.include_router(batches_router, dependencies=[Depends(verify_user_access)])
 app.include_router(metrics_router, dependencies=[Depends(verify_admin_access)])

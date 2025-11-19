@@ -115,6 +115,11 @@ async def process_request(
     # For non-streaming requests, collect the full response to cache it properly
     full_response = bytearray()
 
+    # Buffer for chat_id extraction in streaming mode
+    stream_buffer = ""
+    chat_id_found = False
+    chat_cache = getattr(request.app.state, "chat_cache", None)
+
     async with request.app.state.aiohttp_client_wrapper().request(
         method=request.method,
         url=backend_url + endpoint,
@@ -132,10 +137,45 @@ async def process_request(
                 request.app.state.request_stats_monitor.on_request_response(
                     backend_url, request_id, time.time()
                 )
+
+            # Extract chat_id for streaming response
+            if is_streaming and not chat_id_found and chat_cache is not None:
+                try:
+                    text_chunk = chunk.decode("utf-8", errors="ignore")
+                    stream_buffer += text_chunk
+                    # Look for data: {...}
+                    while "\n" in stream_buffer:
+                        line, stream_buffer = stream_buffer.split("\n", 1)
+                        line = line.strip()
+                        if line.startswith("data: ") and line != "data: [DONE]":
+                            try:
+                                data_str = line[6:].strip()
+                                data_json = json.loads(data_str)
+                                if "id" in data_json:
+                                    chat_id_val = data_json["id"]
+                                    chat_cache[chat_id_val] = backend_url
+                                    chat_id_found = True
+                                    break
+                            except Exception:
+                                pass
+                    if len(stream_buffer) > 4096:  # Stop buffering if too large
+                        chat_id_found = True
+                except Exception:
+                    pass
+
             # For non-streaming requests, collect the full response
             if full_response is not None:
                 full_response.extend(chunk)
             yield chunk
+
+    # Extract chat_id for non-streaming response
+    if not is_streaming and chat_cache is not None and full_response:
+        try:
+            response_json = json.loads(full_response.decode("utf-8"))
+            if "id" in response_json:
+                chat_cache[response_json["id"]] = backend_url
+        except Exception:
+            pass
 
     request.app.state.request_stats_monitor.on_request_complete(
         backend_url, request_id, time.time()
