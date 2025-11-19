@@ -111,6 +111,10 @@ async def process_request(
     headers = {
         k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP_HEADERS
     }
+    # Add OPENAI_API_KEY if set
+    if OPENAI_API_KEY := os.getenv("OPENAI_API_KEY"):
+        logger.info("Using OpenAI API key for backend authentication")
+        headers["Authorization"] = f"Bearer {OPENAI_API_KEY}"
 
     # For non-streaming requests, collect the full response to cache it properly
     full_response = bytearray()

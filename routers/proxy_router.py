@@ -1,9 +1,7 @@
 import asyncio
-import json
 import os
-from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Header
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from vllm_router.log import init_logger
@@ -15,7 +13,6 @@ from vllm_router.quote import (
     ed25519_context,
     generate_attestation,
 )
-from vllm_router.auth import verify_user_access
 
 router = APIRouter()
 logger = init_logger(__name__)
@@ -23,7 +20,7 @@ logger = init_logger(__name__)
 TIMEOUT = 10  # Timeout for backend requests in seconds
 
 
-@router.get("/v1/attestation/report", dependencies=[Depends(verify_user_access)])
+@router.get("/v1/attestation/report")
 async def attestation_report(
     request: Request,
     signing_algo: str | None = None,
@@ -75,7 +72,7 @@ async def attestation_report(
                 params["signing_address"] = signing_address
 
             headers = {}
-            headers["Authorization"] = os.environ.get("OPENAI_API_KEY")
+            headers["Authorization"] = f"Bearer {os.environ.get('OPENAI_API_KEY')}"
 
             async with client.get(
                 f"{url}/v1/attestation/report",
@@ -123,7 +120,7 @@ async def attestation_report(
     return response
 
 
-@router.get("/v1/signature/{chat_id}", dependencies=[Depends(verify_user_access)])
+@router.get("/v1/signature/{chat_id}")
 async def get_signature(
     request: Request,
     chat_id: str,
@@ -145,7 +142,7 @@ async def get_signature(
                 params["signing_algo"] = signing_algo
 
             headers = {}
-            headers["Authorization"] = os.environ.get("OPENAI_API_KEY")
+            headers["Authorization"] = f"Bearer {os.environ.get('OPENAI_API_KEY')}"
 
             async with client.get(
                 f"{url}/v1/signature/{chat_id}",
