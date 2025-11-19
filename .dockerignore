@@ -1,0 +1,10 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+.env
+venv
+.venv
+Dockerfile
+build-image.sh
+oci.tar
