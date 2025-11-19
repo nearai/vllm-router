@@ -223,10 +223,85 @@ class StaticServiceDiscovery(ServiceDiscovery):
         self.added_timestamp = int(time.time())
         self.unhealthy_endpoint_hashes = []
         self._running = True
+        self._lock = threading.Lock()
         if static_backend_health_checks:
             self.start_health_check_task()
         self.prefill_model_labels = prefill_model_labels
         self.decode_model_labels = decode_model_labels
+
+    async def add_backend(self, url: str):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{url}/v1/models") as response:
+                    if response.status != 200:
+                        logger.error(
+                            f"Failed to fetch models from {url}: {response.status}"
+                        )
+                        return
+
+                    data = await response.json()
+                    models_data = data.get("data", [])
+
+            with self._lock:
+                for model_data in models_data:
+                    model_id = model_data.get("id")
+                    if not model_id:
+                        continue
+
+                    # Check if specific combination exists
+                    exists = False
+                    for u, m in zip(self.urls, self.models):
+                        if u == url and m == model_id:
+                            exists = True
+                            break
+
+                    if exists:
+                        logger.info(
+                            f"Backend {url} with model {model_id} already exists."
+                        )
+                        continue
+
+                    self.urls.append(url)
+                    self.models.append(model_id)
+                    self.engines_id.append(str(uuid.uuid4()))
+
+                    if self.model_labels is not None:
+                        self.model_labels.append("default")
+
+                    if self.model_types is not None:
+                        self.model_types.append("default")
+
+                    logger.info(f"Added backend {url} with model {model_id}")
+
+        except Exception as e:
+            logger.error(f"Error adding backend {url}: {e}")
+
+    def remove_backend(self, url: str):
+        with self._lock:
+            try:
+                # Find all indices matching the URL (iterate backwards to avoid index shifting issues)
+                indices = [i for i, u in enumerate(self.urls) if u == url]
+
+                if not indices:
+                    logger.warning(f"Backend {url} not found.")
+                    return
+
+                # Remove in reverse order
+                for idx in sorted(indices, reverse=True):
+                    model = self.models[idx]
+                    self.urls.pop(idx)
+                    self.models.pop(idx)
+                    self.engines_id.pop(idx)
+
+                    if self.model_labels is not None:
+                        self.model_labels.pop(idx)
+
+                    if self.model_types is not None:
+                        self.model_types.pop(idx)
+
+                    logger.info(f"Removed backend {url} with model {model}")
+            except Exception as e:
+                logger.error(f"Error removing backend: {e}")
 
     def get_unhealthy_endpoint_hashes(self) -> list[str]:
         unhealthy_endpoints = []
@@ -298,25 +373,26 @@ class StaticServiceDiscovery(ServiceDiscovery):
         Returns:
             a list of engine URLs
         """
-        endpoint_infos = []
-        for i, (url, model) in enumerate(zip(self.urls, self.models)):
-            if (
-                self.get_model_endpoint_hash(url, model)
-                in self.unhealthy_endpoint_hashes
-            ):
-                continue
-            model_label = self.model_labels[i] if self.model_labels else "default"
-            endpoint_info = EndpointInfo(
-                url=url,
-                model_names=[model],  # Convert single model to list
-                Id=self.engines_id[i],
-                sleep=False,
-                added_timestamp=self.added_timestamp,
-                model_label=model_label,
-                model_info=self._get_model_info(model),
-            )
-            endpoint_infos.append(endpoint_info)
-        return endpoint_infos
+        with self._lock:
+            endpoint_infos = []
+            for i, (url, model) in enumerate(zip(self.urls, self.models)):
+                if (
+                    self.get_model_endpoint_hash(url, model)
+                    in self.unhealthy_endpoint_hashes
+                ):
+                    continue
+                model_label = self.model_labels[i] if self.model_labels else "default"
+                endpoint_info = EndpointInfo(
+                    url=url,
+                    model_names=[model],  # Convert single model to list
+                    Id=self.engines_id[i],
+                    sleep=False,
+                    added_timestamp=self.added_timestamp,
+                    model_label=model_label,
+                    model_info=self._get_model_info(model),
+                )
+                endpoint_infos.append(endpoint_info)
+            return endpoint_infos
 
     async def initialize_client_sessions(self) -> None:
         """
