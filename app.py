@@ -18,9 +18,10 @@ from contextlib import asynccontextmanager
 
 import sentry_sdk
 import uvicorn
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
 from vllm_router.aiohttp_client import AiohttpClientWrapper
+from vllm_router.auth import verify_admin_access, verify_user_access
 from vllm_router.dynamic_config import (
     DynamicRouterConfig,
     get_dynamic_config_watcher,
@@ -31,6 +32,7 @@ from vllm_router.parsers.parser import parse_args
 from vllm_router.routers.batches_router import batches_router
 from vllm_router.routers.config_router import config_router
 from vllm_router.routers.files_router import files_router
+from vllm_router.routers.health_router import health_router
 from vllm_router.routers.main_router import main_router
 from vllm_router.routers.metrics_router import metrics_router
 from vllm_router.routers.routing_logic import (
@@ -268,11 +270,12 @@ def initialize_all(app: FastAPI, args):
 
 
 app = FastAPI(lifespan=lifespan)
-app.include_router(main_router)
-app.include_router(files_router)
-app.include_router(batches_router)
-app.include_router(metrics_router)
-app.include_router(config_router)
+app.include_router(health_router)
+app.include_router(main_router, dependencies=[Depends(verify_user_access)])
+app.include_router(files_router, dependencies=[Depends(verify_user_access)])
+app.include_router(batches_router, dependencies=[Depends(verify_user_access)])
+app.include_router(metrics_router, dependencies=[Depends(verify_admin_access)])
+app.include_router(config_router, dependencies=[Depends(verify_admin_access)])
 app.state.aiohttp_client_wrapper = AiohttpClientWrapper()
 app.state.semantic_cache_available = semantic_cache_available
 
