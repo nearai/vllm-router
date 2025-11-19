@@ -95,8 +95,6 @@ def validate_args(args):
             )
         if args.static_backend_health_checks:
             validate_static_model_types(args.static_model_types)
-    if args.service_discovery == "k8s" and args.k8s_port is None:
-        raise ValueError("K8s port must be provided when using K8s service discovery.")
     if args.routing_logic == "session" and args.session_key is None:
         raise ValueError(
             "Session key must be provided when using session routing logic."
@@ -126,14 +124,8 @@ def parse_args():
     parser.add_argument(
         "--service-discovery",
         type=str,
-        choices=["static", "k8s"],
+        choices=["static"],
         help="The service discovery type.",
-    )
-    parser.add_argument(
-        "--k8s-service-discovery-type",
-        type=str,
-        choices=["pod-ip", "service-name"],
-        help="The k8s service discovery type implementation only applies if service-discovery is specified as k8s.",
     )
     parser.add_argument(
         "--static-backends",
@@ -169,30 +161,6 @@ def parse_args():
         "--static-backend-health-checks",
         action="store_true",
         help="Enable this flag to make vllm-router check periodically if the models work by sending dummy requests to their endpoints.",
-    )
-    parser.add_argument(
-        "--k8s-port",
-        type=int,
-        default=8000,
-        help="The port of vLLM processes when using K8s service discovery.",
-    )
-    parser.add_argument(
-        "--k8s-namespace",
-        type=str,
-        default="default",
-        help="The namespace of vLLM pods when using K8s service discovery.",
-    )
-    parser.add_argument(
-        "--k8s-label-selector",
-        type=str,
-        default="",
-        help="The label selector to filter vLLM pods when using K8s service discovery.",
-    )
-    parser.add_argument(
-        "--k8s-watcher-timeout-seconds",
-        type=int,
-        default=0,
-        help="Timeout in seconds for Kubernetes watcher streams (default: 0).",
     )
     parser.add_argument(
         "--backend-health-check-timeout-seconds",

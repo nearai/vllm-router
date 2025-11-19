@@ -60,9 +60,6 @@ class DynamicRouterConfig:
     static_backend_health_checks: Optional[bool] = False
     prefill_model_labels: Optional[str] = None
     decode_model_labels: Optional[str] = None
-    k8s_port: Optional[int] = None
-    k8s_namespace: Optional[str] = None
-    k8s_label_selector: Optional[str] = None
 
     # Routing logic configurations
     session_key: Optional[str] = None
@@ -92,9 +89,6 @@ class DynamicRouterConfig:
             static_models=args.static_models,
             static_model_types=args.static_model_types,
             static_aliases=args.static_aliases,
-            k8s_port=args.k8s_port,
-            k8s_namespace=args.k8s_namespace,
-            k8s_label_selector=args.k8s_label_selector,
             # Routing logic configurations
             routing_logic=args.routing_logic,
             session_key=args.session_key,
@@ -172,20 +166,6 @@ class DynamicConfigWatcher(metaclass=SingletonMeta):
                 model_labels=parse_comma_separated_args(config.static_model_labels),
                 model_types=parse_comma_separated_args(config.static_model_types),
                 static_backend_health_checks=config.static_backend_health_checks,
-                prefill_model_labels=parse_comma_separated_args(
-                    config.prefill_model_labels
-                ),
-                decode_model_labels=parse_comma_separated_args(
-                    config.decode_model_labels
-                ),
-            )
-        elif config.service_discovery == "k8s":
-            reconfigure_service_discovery(
-                ServiceDiscoveryType.K8S,
-                app=self.app,
-                namespace=config.k8s_namespace,
-                port=config.k8s_port,
-                label_selector=config.k8s_label_selector,
                 prefill_model_labels=parse_comma_separated_args(
                     config.prefill_model_labels
                 ),

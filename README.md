@@ -6,7 +6,6 @@ The source code for the request router.
 
 - Support routing to endpoints that run different models
 - Exporting observability metrics for each serving engine instance, including QPS, time-to-first-token (TTFT), number of pending/running/finished requests, and uptime
-- Support automatic service discovery and fault tolerance by Kubernetes API
 - Model aliases
 - Multiple different routing algorithms
   - Round-robin routing
@@ -24,14 +23,11 @@ The router can be configured using command-line arguments. Below are the availab
 
 ### Service Discovery Options
 
-- `--service-discovery`: The service discovery type. Options are `static` or `k8s`. This option is required.
+- `--service-discovery`: The service discovery type. Options are `static`. This option is required.
 - `--static-backends`: The URLs of static serving engines, separated by commas (e.g., `http://localhost:8000,http://localhost:8001`).
 - `--static-models`: The models running in the static serving engines, separated by commas (e.g., `model1,model2`).
 - `--static-aliases`: The aliases of the models running in the static serving engines, separated by commas and associated using colons (e.g., `model_alias1:model,mode_alias2:model`).
 - `--static-backend-health-checks`: Enable this flag to make vllm-router check periodically if the models work by sending dummy requests to their endpoints.
-- `--k8s-port`: The port of vLLM processes when using K8s service discovery. Default is `8000`.
-- `--k8s-namespace`: The namespace of vLLM pods when using K8s service discovery. Default is `default`.
-- `--k8s-label-selector`: The label selector to filter vLLM pods when using K8s service discovery.
 
 ### Routing Logic Options
 
@@ -115,7 +111,7 @@ Currently, the dynamic config supports the following fields:
 
 **Required fields:**
 
-- `service_discovery`: The service discovery type. Options are `static` or `k8s`.
+- `service_discovery`: The service discovery type. Options are `static`.
 - `routing_logic`: The routing logic to use. Options are `roundrobin` or `session`.
 
 **Optional fields:**
@@ -125,9 +121,6 @@ Currently, the dynamic config supports the following fields:
 - (When using `static` service discovery) `static_models`: The models running in the static serving engines, separated by commas (e.g., `model1,model2`).
 - (When using `static` service discovery) `static_aliases`: The aliases of the models running in the static serving engines, separated by commas and associated using colons (e.g., `model_alias1:model,mode_alias2:model`).
 - (When using `static` service discovery and if you enable the `--static-backend-health-checks` flag) `static_model_types`: The model types running in the static serving engines, separated by commas (e.g., `chat,chat`).
-- (When using `k8s` service discovery) `k8s_port`: The port of vLLM processes when using K8s service discovery. Default is `8000`.
-- (When using `k8s` service discovery) `k8s_namespace`: The namespace of vLLM pods when using K8s service discovery. Default is `default`.
-- (When using `k8s` service discovery) `k8s_label_selector`: The label selector to filter vLLM pods when using K8s service discovery.
 - `session_key`: The key (in the header) to identify a session when using session-based routing.
 
 Here is an example of a dynamic YAML config file:
