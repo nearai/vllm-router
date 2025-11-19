@@ -3,6 +3,12 @@ FROM python:3.13-slim
 # Install dependencies
 WORKDIR /tmp
 COPY requirements.txt ./
+# Install build dependencies for packages that don't have wheels for this python version
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir --upgrade -r requirements.txt \
     && rm -rf requirements.txt
 
