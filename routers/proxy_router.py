@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Header
@@ -73,13 +74,8 @@ async def attestation_report(
             if signing_address:
                 params["signing_address"] = signing_address
 
-            # Add auth header if needed (vllm-proxy expects verify_authorization_header)
-            # which usually checks Authorization header. We forward the incoming one or use VLLM_API_KEY?
-            # main_router uses os.environ.get('OPENAI_API_KEY') or VLLM_API_KEY logic.
-            # Let's blindly forward Authorization header if present.
             headers = {}
-            if "Authorization" in request.headers:
-                headers["Authorization"] = request.headers["Authorization"]
+            headers["Authorization"] = os.environ.get("OPENAI_API_KEY")
 
             async with client.get(
                 f"{url}/v1/attestation/report",
@@ -149,8 +145,7 @@ async def get_signature(
                 params["signing_algo"] = signing_algo
 
             headers = {}
-            if "Authorization" in request.headers:
-                headers["Authorization"] = request.headers["Authorization"]
+            headers["Authorization"] = os.environ.get("OPENAI_API_KEY")
 
             async with client.get(
                 f"{url}/v1/signature/{chat_id}",
