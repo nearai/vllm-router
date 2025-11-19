@@ -14,4 +14,4 @@ dstack-sdk
 web3
 eth-account
 cryptography
-yaml
+PyYAML
