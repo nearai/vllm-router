@@ -124,7 +124,7 @@ class EngineStatsScraper(metaclass=SingletonMeta):
             url (str): The URL of the serving engine (does not contain endpoint)
         """
         try:
-            response = requests.get(url + "/metrics", timeout=self.scrape_interval)
+            response = requests.get(url + "/v1/metrics", timeout=self.scrape_interval)
             response.raise_for_status()
             engine_stats = EngineStats.from_vllm_scrape(response.text)
         except Exception as e:
