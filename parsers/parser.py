@@ -85,14 +85,23 @@ def validate_static_model_types(model_types: str | None) -> None:
 def validate_args(args):
     verify_required_args_provided(args)
     if args.service_discovery == "static":
-        if args.static_backends is None:
+        # Allow starting without backends, but if one is provided, the other must be too
+        if args.static_backends is not None and args.static_models is None:
             raise ValueError(
-                "Static backends must be provided when using static service discovery."
+                "Static models must be provided when static backends are specified."
             )
-        if args.static_models is None:
+        if args.static_models is not None and args.static_backends is None:
             raise ValueError(
-                "Static models must be provided when using static service discovery."
+                "Static backends must be provided when static models are specified."
             )
+        # If both are provided, validate they have the same number of items
+        if args.static_backends is not None and args.static_models is not None:
+            backend_count = len(utils.parse_comma_separated_args(args.static_backends))
+            model_count = len(utils.parse_comma_separated_args(args.static_models))
+            if backend_count != model_count:
+                raise ValueError(
+                    f"Number of static backends ({backend_count}) must match number of static models ({model_count})."
+                )
         if args.static_backend_health_checks:
             validate_static_model_types(args.static_model_types)
     if args.routing_logic == "session" and args.session_key is None:

@@ -146,8 +146,8 @@ def initialize_all(app: FastAPI, args):
         initialize_service_discovery(
             ServiceDiscoveryType.STATIC,
             app=app,
-            urls=parse_static_urls(args.static_backends),
-            models=parse_comma_separated_args(args.static_models),
+            urls=parse_static_urls(args.static_backends) if args.static_backends else None,
+            models=parse_comma_separated_args(args.static_models) if args.static_models else None,
             aliases=(
                 parse_static_aliases(args.static_aliases)
                 if args.static_aliases

@@ -203,8 +203,8 @@ class StaticServiceDiscovery(ServiceDiscovery):
     def __init__(
         self,
         app,
-        urls: List[str],
-        models: List[str],
+        urls: List[str] | None = None,
+        models: List[str] | None = None,
         aliases: List[str] | None = None,
         model_labels: List[str] | None = None,
         model_types: List[str] | None = None,
@@ -213,7 +213,21 @@ class StaticServiceDiscovery(ServiceDiscovery):
         decode_model_labels: List[str] | None = None,
     ):
         self.app = app
-        assert len(urls) == len(models), "URLs and models should have the same length"
+        
+        # Handle empty backend configuration
+        if urls is None:
+            urls = []
+        if models is None:
+            models = []
+            
+        # Validate that if both are provided, they have the same length
+        if urls and models:
+            assert len(urls) == len(models), "URLs and models should have the same length"
+        elif urls and not models:
+            raise ValueError("Models must be provided when URLs are specified")
+        elif models and not urls:
+            raise ValueError("URLs must be provided when models are specified")
+            
         self.urls = urls
         self.models = models
         self.aliases = aliases
@@ -224,7 +238,7 @@ class StaticServiceDiscovery(ServiceDiscovery):
         self.unhealthy_endpoint_hashes = []
         self._running = True
         self._lock = threading.Lock()
-        if static_backend_health_checks:
+        if static_backend_health_checks and urls:
             self.start_health_check_task()
         self.prefill_model_labels = prefill_model_labels
         self.decode_model_labels = decode_model_labels
