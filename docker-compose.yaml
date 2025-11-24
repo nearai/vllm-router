@@ -1,0 +1,26 @@
+services:
+  vllm-router:
+    # build the image with ./build-image --local
+    image: vllm-router:dev
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    dns:
+      - 100.100.100.100
+      - 1.1.1.1
+    dns_search:
+      - dstack.internal
+    environment:
+      - PORT=80
+      - ADMIN_TOKEN=admin
+      - USER_TOKEN=user
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    command: >
+      --routing-logic prefixaware
+      --port 80
+      --service-discovery static

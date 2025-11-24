@@ -1,0 +1,39 @@
+@baseUrl = http://localhost
+@adminToken = admin
+@userToken = user
+
+
+
+### Health check
+GET {{baseUrl}}/health
+Authorization: Bearer {{adminToken}}
+
+### Get backends
+GET {{baseUrl}}/backends
+Authorization: Bearer {{adminToken}}
+
+### Add backend
+
+POST {{baseUrl}}/config/backends/add
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{
+  "url": "http://..."
+}
+
+
+### Test completions
+
+POST {{baseUrl}}/v1/completions
+Content-Type: application/json
+Authorization: Bearer {{userToken}}
+
+{
+  "model": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+  "prompt": "Hello, how are you?",
+  "max_tokens": 2000,
+  "min_tokens": 100,
+  "temperature": 1.0,
+  "stream": false
+}
