@@ -178,6 +178,24 @@ def parse_args():
         help="Timeout in seconds for backend health check requests (default: 10).",
     )
     parser.add_argument(
+        "--health-check-include-models-endpoint",
+        action="store_true",
+        default=True,
+        help="Enable periodic checks of /v1/models endpoint to verify backend availability and update model lists.",
+    )
+    parser.add_argument(
+        "--health-check-include-attestation",
+        action="store_true",
+        default=True,
+        help="Enable periodic checks of /v1/attestation/report endpoint. Backends without this endpoint will be removed.",
+    )
+    parser.add_argument(
+        "--health-check-removal-threshold",
+        type=int,
+        default=3,
+        help="Number of consecutive health check failures before permanently removing a backend (default: 3).",
+    )
+    parser.add_argument(
         "--routing-logic",
         type=str,
         choices=[

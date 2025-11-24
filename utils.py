@@ -255,3 +255,47 @@ def is_model_healthy(url: str, model: str, model_type: str) -> bool:
     except requests.exceptions.RequestException as e:
         logger.debug(f"{model_type} Model {model} at {url} is not healthy: {e}")
         return False
+
+
+def fetch_models_list(url: str, timeout: int = 10) -> Optional[list[str]]:
+    """
+    Fetch the list of models from a backend's /v1/models endpoint.
+
+    Args:
+        url: The base URL of the backend
+        timeout: Request timeout in seconds
+
+    Returns:
+        List of model IDs if successful, None if the endpoint is not available
+    """
+    try:
+        response = requests.get(f"{url}/v1/models", timeout=timeout)
+        response.raise_for_status()
+        data = response.json()
+        models_data = data.get("data", [])
+        return [model.get("id") for model in models_data if model.get("id")]
+    except requests.exceptions.RequestException as e:
+        logger.debug(f"Failed to fetch models from {url}: {e}")
+        return None
+
+
+def check_attestation_available(url: str, timeout: int = 10) -> bool:
+    """
+    Check if the /v1/attestation/report endpoint is available on a backend.
+
+    Args:
+        url: The base URL of the backend
+        timeout: Request timeout in seconds
+
+    Returns:
+        True if the endpoint responds successfully, False otherwise
+    """
+    try:
+        response = requests.get(f"{url}/v1/attestation/report", timeout=timeout)
+        response.raise_for_status()
+        # Verify it returns valid JSON
+        response.json()
+        return True
+    except requests.exceptions.RequestException as e:
+        logger.debug(f"Attestation endpoint not available at {url}: {e}")
+        return False

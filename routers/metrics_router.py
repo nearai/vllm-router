@@ -32,6 +32,9 @@ from vllm_router.services.metrics_service import (
     num_prefill_requests,
     num_requests_running,
     num_requests_swapped,
+    vllm_router_backends_healthy,
+    vllm_router_backends_total,
+    vllm_router_backends_unhealthy,
 )
 from vllm_router.stats.engine_stats import get_engine_stats_scraper
 from vllm_router.stats.request_stats import get_request_stats_monitor
@@ -118,6 +121,18 @@ async def metrics():
         healthy_pods_total.labels(server=ep.url).set(
             1 if getattr(ep, "healthy", True) else 0
         )
+
+    # Backend health metrics
+    service_discovery = get_service_discovery()
+    if hasattr(service_discovery, "get_backend_health_status"):
+        backend_status = service_discovery.get_backend_health_status()
+        total_backends = len(backend_status)
+        healthy_backends = sum(1 for b in backend_status if b["healthy"])
+        unhealthy_backends = total_backends - healthy_backends
+
+        vllm_router_backends_total.set(total_backends)
+        vllm_router_backends_healthy.set(healthy_backends)
+        vllm_router_backends_unhealthy.set(unhealthy_backends)
 
     # Return all metrics in Prometheus format
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

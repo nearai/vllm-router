@@ -50,3 +50,17 @@ avg_itl = Gauge("vllm:avg_itl", "Average Inter-Token Latency", ["server"])
 num_requests_swapped = Gauge(
     "vllm:num_requests_swapped", "Number of swapped requests", ["server"]
 )
+
+# Backend health monitoring metrics
+vllm_router_backends_total = Gauge(
+    "vllm_router_backends_total", "Total number of configured backends"
+)
+vllm_router_backends_healthy = Gauge(
+    "vllm_router_backends_healthy", "Number of healthy backends"
+)
+vllm_router_backends_unhealthy = Gauge(
+    "vllm_router_backends_unhealthy", "Number of unhealthy backends"
+)
+vllm_router_backends_removed_total = Counter(
+    "vllm_router_backends_removed_total", "Total number of backends permanently removed due to health check failures"
+)

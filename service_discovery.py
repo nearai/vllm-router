@@ -211,6 +211,10 @@ class StaticServiceDiscovery(ServiceDiscovery):
         static_backend_health_checks: bool = False,
         prefill_model_labels: List[str] | None = None,
         decode_model_labels: List[str] | None = None,
+        health_check_include_models_endpoint: bool = True,
+        health_check_include_attestation: bool = True,
+        health_check_removal_threshold: int = 3,
+        backend_health_check_timeout_seconds: int = 10,
     ):
         self.app = app
         
@@ -238,6 +242,16 @@ class StaticServiceDiscovery(ServiceDiscovery):
         self.unhealthy_endpoint_hashes = []
         self._running = True
         self._lock = threading.Lock()
+
+        # Health check configuration
+        self.health_check_include_models_endpoint = health_check_include_models_endpoint
+        self.health_check_include_attestation = health_check_include_attestation
+        self.health_check_removal_threshold = health_check_removal_threshold
+        self.backend_health_check_timeout = backend_health_check_timeout_seconds
+
+        # Track consecutive failures for each backend (key: hash, value: failure count)
+        self.backend_failure_counts: Dict[str, int] = {}
+
         if static_backend_health_checks and urls:
             self.start_health_check_task()
         self.prefill_model_labels = prefill_model_labels
@@ -319,20 +333,87 @@ class StaticServiceDiscovery(ServiceDiscovery):
 
     def get_unhealthy_endpoint_hashes(self) -> list[str]:
         unhealthy_endpoints = []
+        backends_to_remove = []
+
         try:
             for url, model, model_type in zip(
                 self.urls, self.models, self.model_types, strict=True
             ):
-                if utils.is_model_healthy(url, model, model_type):
+                endpoint_hash = self.get_model_endpoint_hash(url, model)
+                is_healthy = True
+                health_check_results = []
+
+                # Check 1: Model inference health (existing check)
+                if self.model_types:
+                    model_healthy = utils.is_model_healthy(url, model, model_type)
+                    health_check_results.append(("inference", model_healthy))
+                    if not model_healthy:
+                        is_healthy = False
+                        logger.debug(f"Model inference check failed for {model} at {url}")
+
+                # Check 2: Models endpoint availability
+                if self.health_check_include_models_endpoint:
+                    models_list = utils.fetch_models_list(url, self.backend_health_check_timeout)
+                    models_available = models_list is not None
+                    health_check_results.append(("models_endpoint", models_available))
+                    if not models_available:
+                        is_healthy = False
+                        logger.debug(f"Models endpoint check failed for {url}")
+                    elif models_list and model not in models_list:
+                        logger.warning(f"Model {model} no longer available at {url}. Available models: {models_list}")
+                        is_healthy = False
+
+                # Check 3: Attestation endpoint availability
+                if self.health_check_include_attestation:
+                    attestation_available = utils.check_attestation_available(url, self.backend_health_check_timeout)
+                    health_check_results.append(("attestation", attestation_available))
+                    if not attestation_available:
+                        is_healthy = False
+                        logger.debug(f"Attestation endpoint check failed for {url}")
+
+                # Update failure counts and determine if backend should be removed
+                if is_healthy:
+                    # Reset failure count on success
+                    if endpoint_hash in self.backend_failure_counts:
+                        del self.backend_failure_counts[endpoint_hash]
                     logger.debug(f"{model} at {url} is healthy")
                 else:
-                    logger.warning(f"{model} at {url} not healthy!")
-                    unhealthy_endpoints.append(self.get_model_endpoint_hash(url, model))
+                    # Increment failure count
+                    self.backend_failure_counts[endpoint_hash] = self.backend_failure_counts.get(endpoint_hash, 0) + 1
+                    failure_count = self.backend_failure_counts[endpoint_hash]
+
+                    logger.warning(
+                        f"{model} at {url} not healthy! Failure count: {failure_count}/{self.health_check_removal_threshold}. "
+                        f"Failed checks: {[check for check, result in health_check_results if not result]}"
+                    )
+
+                    unhealthy_endpoints.append(endpoint_hash)
+
+                    # Mark for removal if threshold exceeded
+                    if failure_count >= self.health_check_removal_threshold:
+                        logger.error(
+                            f"Backend {url} with model {model} exceeded failure threshold "
+                            f"({failure_count} >= {self.health_check_removal_threshold}). Marking for removal."
+                        )
+                        backends_to_remove.append(url)
+
         except ValueError:
             logger.error(
                 "To perform health check, each model has to define a static_model_type and at least one static_backend. "
                 "Skipping health checks for now."
             )
+
+        # Remove backends that exceeded the failure threshold
+        for url in set(backends_to_remove):
+            logger.info(f"Permanently removing backend {url} due to repeated health check failures")
+            self.remove_backend(url)
+            # Increment Prometheus counter for removed backends
+            try:
+                from vllm_router.services.metrics_service import vllm_router_backends_removed_total
+                vllm_router_backends_removed_total.inc()
+            except ImportError:
+                pass  # Metrics service may not be available in all contexts
+
         return unhealthy_endpoints
 
     async def check_model_health(self):
@@ -429,6 +510,37 @@ class StaticServiceDiscovery(ServiceDiscovery):
                         base_url=endpoint_info.url,
                         timeout=aiohttp.ClientTimeout(total=None),
                     )
+
+    def get_backend_health_status(self) -> List[Dict]:
+        """
+        Get the health status of all backends.
+
+        Returns:
+            List of dictionaries containing backend health information
+        """
+        with self._lock:
+            backend_status = []
+            for i, (url, model) in enumerate(zip(self.urls, self.models)):
+                endpoint_hash = self.get_model_endpoint_hash(url, model)
+                failure_count = self.backend_failure_counts.get(endpoint_hash, 0)
+                is_healthy = endpoint_hash not in self.unhealthy_endpoint_hashes
+
+                status = {
+                    "url": url,
+                    "model": model,
+                    "engine_id": self.engines_id[i],
+                    "healthy": is_healthy,
+                    "failure_count": failure_count,
+                    "failure_threshold": self.health_check_removal_threshold,
+                    "model_label": self.model_labels[i] if self.model_labels else "default",
+                }
+
+                if self.model_types:
+                    status["model_type"] = self.model_types[i]
+
+                backend_status.append(status)
+
+            return backend_status
 
     def close(self):
         """

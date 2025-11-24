@@ -166,6 +166,10 @@ def initialize_all(app: FastAPI, args):
             static_backend_health_checks=args.static_backend_health_checks,
             prefill_model_labels=args.prefill_model_labels,
             decode_model_labels=args.decode_model_labels,
+            health_check_include_models_endpoint=args.health_check_include_models_endpoint,
+            health_check_include_attestation=args.health_check_include_attestation,
+            health_check_removal_threshold=args.health_check_removal_threshold,
+            backend_health_check_timeout_seconds=args.backend_health_check_timeout_seconds,
         )
     else:
         raise ValueError(f"Invalid service discovery type: {args.service_discovery}")
