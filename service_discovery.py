@@ -258,22 +258,31 @@ class StaticServiceDiscovery(ServiceDiscovery):
         self.decode_model_labels = decode_model_labels
 
     async def add_backend(self, url: str):
+        logger.info(f"add_backend called with url: {url}")
         try:
+            logger.debug(f"creating aiohttp session to fetch models from {url}/v1/models")
             async with aiohttp.ClientSession() as session:
                 async with session.get(f"{url}/v1/models") as response:
+                    logger.debug(f"received response from {url}/v1/models with status: {response.status}")
                     if response.status != 200:
                         logger.error(
-                            f"Failed to fetch models from {url}: {response.status}"
+                            f"failed to fetch models from {url}: HTTP {response.status}"
                         )
                         return
 
                     data = await response.json()
                     models_data = data.get("data", [])
+                    logger.info(f"fetched {len(models_data)} models from {url}: {[m.get('id') for m in models_data]}")
 
             with self._lock:
+                logger.debug(f"acquired lock, current backends count: {len(self.urls)}")
+                logger.debug(f"current backends: {list(zip(self.urls, self.models))}")
+
+                models_to_add = []
                 for model_data in models_data:
                     model_id = model_data.get("id")
                     if not model_id:
+                        logger.warning(f"skipping model from {url} with no id: {model_data}")
                         continue
 
                     # Check if specific combination exists
@@ -285,24 +294,41 @@ class StaticServiceDiscovery(ServiceDiscovery):
 
                     if exists:
                         logger.info(
-                            f"Backend {url} with model {model_id} already exists."
+                            f"backend {url} with model {model_id} already exists, skipping"
                         )
                         continue
 
+                    models_to_add.append(model_id)
+
+                if not models_to_add:
+                    logger.info(f"no new models to add from {url}, all models already registered")
+                    return
+
+                logger.info(f"adding {len(models_to_add)} new models from {url}: {models_to_add}")
+
+                for model_id in models_to_add:
                     self.urls.append(url)
                     self.models.append(model_id)
                     self.engines_id.append(str(uuid.uuid4()))
 
                     if self.model_labels is not None:
                         self.model_labels.append("default")
+                        logger.debug(f"appended default model_label for {model_id}")
 
                     if self.model_types is not None:
                         self.model_types.append("default")
+                        logger.debug(f"appended default model_type for {model_id}")
 
-                    logger.info(f"Added backend {url} with model {model_id}")
+                    logger.info(f"successfully added backend {url} with model {model_id}")
 
+                logger.info(f"backend registration complete, total backends: {len(self.urls)}")
+
+        except aiohttp.ClientError as e:
+            logger.error(f"network error adding backend {url}: {type(e).__name__}: {e}")
+        except asyncio.TimeoutError:
+            logger.error(f"timeout error adding backend {url}")
         except Exception as e:
-            logger.error(f"Error adding backend {url}: {e}")
+            logger.error(f"unexpected error adding backend {url}: {type(e).__name__}: {e}", exc_info=True)
 
     def remove_backend(self, url: str):
         with self._lock:

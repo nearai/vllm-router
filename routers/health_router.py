@@ -6,6 +6,9 @@ from vllm_router.dynamic_config import get_dynamic_config_watcher
 from vllm_router.service_discovery import get_service_discovery
 from vllm_router.stats.engine_stats import get_engine_stats_scraper
 from vllm_router.version import __version__
+from vllm_router.log import init_logger
+
+logger = init_logger(__name__)
 
 health_router = APIRouter()
 
@@ -69,11 +72,13 @@ async def backends() -> Response:
     Returns:
         Response: A JSONResponse containing a list of backend health statuses
     """
+    logger.debug("received GET /backends request")
     service_discovery = get_service_discovery()
 
     # Check if the service discovery has the method (only StaticServiceDiscovery has it)
     if hasattr(service_discovery, "get_backend_health_status"):
         backend_status = service_discovery.get_backend_health_status()
+        logger.info(f"returning {len(backend_status)} backends, {sum(1 for b in backend_status if b['healthy'])} healthy, {sum(1 for b in backend_status if not b['healthy'])} unhealthy")
         return JSONResponse(
             content={
                 "backends": backend_status,
@@ -84,6 +89,7 @@ async def backends() -> Response:
             status_code=200,
         )
     else:
+        logger.warning("backend health status not available for this service discovery type")
         return JSONResponse(
             content={"error": "Backend health status not available for this service discovery type"},
             status_code=501,
