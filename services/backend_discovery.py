@@ -116,7 +116,7 @@ class BackendDiscoveryService:
             headers = {}
             if openai_api_key := os.getenv("OPENAI_API_KEY"):
                 headers["Authorization"] = f"Bearer {openai_api_key}"
-
+            logger.debug(f"Testing backend health at {models_url}")
             async with client.get(
                 models_url, headers=headers, timeout=aiohttp.ClientTimeout(total=self.timeout)
             ) as response:

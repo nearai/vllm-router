@@ -333,6 +333,15 @@ def parse_args():
         help="Log level for uvicorn. Default is 'info'.",
     )
 
+    # Add log format argument
+    parser.add_argument(
+        "--log-format",
+        type=str,
+        default="json",
+        choices=["text", "json"],
+        help="Log format for the router. Default is 'json'. Use 'json' for structured logging.",
+    )
+
     parser.add_argument(
         "--sentry-dsn",
         type=str,

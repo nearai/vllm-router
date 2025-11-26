@@ -142,6 +142,32 @@ def initialize_all(app: FastAPI, args):
     Raises:
         ValueError: if the service discovery type is invalid
     """
+    # Initialize the root logger with the specified format
+    from vllm_router.log import init_logger
+    import logging
+    
+    # Convert string log level to logging constant
+    log_level_map = {
+        "critical": logging.CRITICAL,
+        "error": logging.ERROR,
+        "warning": logging.WARNING,
+        "info": logging.INFO,
+        "debug": logging.DEBUG,
+        "trace": logging.DEBUG,  # Map trace to debug
+    }
+    
+    log_level = log_level_map.get(args.log_level.lower(), logging.INFO)
+    root_logger = init_logger("vllm_router", log_level=log_level, log_format=args.log_format)
+    
+    # Configure uvicorn logger to use the same format
+    uvicorn_logger = logging.getLogger("uvicorn")
+    uvicorn_logger.handlers.clear()
+    uvicorn_logger.setLevel(log_level)
+    
+    # Add handlers to uvicorn logger
+    for handler in root_logger.handlers:
+        uvicorn_logger.addHandler(handler)
+    uvicorn_logger.propagate = False
     if sentry_dsn := args.sentry_dsn:
         sentry_sdk.init(
             dsn=sentry_dsn,
