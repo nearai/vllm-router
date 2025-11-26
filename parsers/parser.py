@@ -374,6 +374,37 @@ def parse_args():
         help="The threshold for kv-aware routing.",
     )
 
+    # Backend discovery arguments
+    parser.add_argument(
+        "--enable-backend-discovery",
+        action="store_true",
+        help="Enable automatic backend discovery from Tailscale status",
+    )
+    parser.add_argument(
+        "--tailscale-status-file",
+        type=str,
+        default="/shared/tailscale_status.json",
+        help="Path to Tailscale status JSON file",
+    )
+    parser.add_argument(
+        "--discovery-interval",
+        type=int,
+        default=30,
+        help="Backend discovery interval in seconds",
+    )
+    parser.add_argument(
+        "--discovery-port-range",
+        type=str,
+        default="8000-8010",
+        help="Port range to test for backends (e.g., 8000-8010)",
+    )
+    parser.add_argument(
+        "--discovery-timeout",
+        type=int,
+        default=2,
+        help="Timeout in seconds for backend health check requests",
+    )
+
     args = parser.parse_args()
     args = load_initial_config_from_config_file_if_required(parser, args)
 

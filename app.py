@@ -68,6 +68,11 @@ from vllm_router.utils import (
     parse_static_urls,
     set_ulimit,
 )
+from vllm_router.services.backend_discovery import (
+    cleanup_backend_discovery,
+    get_backend_discovery,
+    initialize_backend_discovery,
+)
 
 try:
     # Semantic cache integration
@@ -120,6 +125,10 @@ async def lifespan(app: FastAPI):
     # Close routing logic instances
     logger.info("Closing routing logic instances")
     cleanup_routing_logic()
+
+    # Close backend discovery service
+    logger.info("Closing backend discovery service")
+    cleanup_backend_discovery()
 
 
 def initialize_all(app: FastAPI, args):
@@ -276,6 +285,16 @@ def initialize_all(app: FastAPI, args):
 
     # Initialize chat cache (maxsize=10000, ttl=1 hour)
     app.state.chat_cache = TTLCache(maxsize=10000, ttl=3600)
+
+    # Initialize backend discovery if enabled
+    if args.enable_backend_discovery:
+        logger.info("Initializing backend discovery service")
+        initialize_backend_discovery(
+            tailscale_status_file=args.tailscale_status_file,
+            discovery_interval=args.discovery_interval,
+            port_range=args.discovery_port_range,
+            timeout=args.discovery_timeout,
+        )
 
 
 app = FastAPI(lifespan=lifespan)

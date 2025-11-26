@@ -12,10 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import aiohttp
+from aiohttp import TCPConnector
+from aiohttp.resolver import AsyncResolver
 
 from vllm_router.log import init_logger
 
 logger = init_logger(__name__)
+
+# DNS cache TTL in seconds
+DNS_CACHE_TTL = 300
 
 
 class AiohttpClientWrapper:
@@ -24,10 +29,26 @@ class AiohttpClientWrapper:
 
     def start(self):
         """Instantiate the client. Call from the FastAPI startup hook."""
-        # To fully leverage the router's concurrency capabilities,
-        # we set the maximum number of connections to be unlimited.
-        self.async_client = aiohttp.ClientSession()
-        logger.info(f"aiohttp ClientSession instantiated. Id {id(self.async_client)}")
+        # Use AsyncResolver (aiodns) for non-blocking DNS resolution
+        # and configure DNS caching to avoid repeated lookups
+        try:
+            resolver = AsyncResolver()
+            logger.info("Using AsyncResolver (aiodns) for DNS resolution")
+        except Exception as e:
+            logger.warning(f"Failed to create AsyncResolver: {e}, using default resolver")
+            resolver = None
+
+        connector = TCPConnector(
+            limit=0,  # Unlimited connections for concurrency
+            ttl_dns_cache=DNS_CACHE_TTL,  # Cache DNS lookups for 5 minutes
+            keepalive_timeout=30,  # Keep connections alive for reuse
+            resolver=resolver,
+        )
+        self.async_client = aiohttp.ClientSession(connector=connector)
+        logger.info(
+            f"aiohttp ClientSession instantiated with DNS caching (TTL={DNS_CACHE_TTL}s). "
+            f"Id {id(self.async_client)}"
+        )
 
     async def stop(self):
         """Gracefully shutdown. Call from FastAPI shutdown hook."""
