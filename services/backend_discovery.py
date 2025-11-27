@@ -127,61 +127,40 @@ class BackendDiscoveryService:
         logger.debug(f"Starting health test for backend at {backend_url}")
         logger.debug(f"Testing endpoint: {models_url}")
 
-        try:
-            # Use the app's aiohttp client wrapper if available
-            from vllm_router.aiohttp_client import AiohttpClientWrapper
-
-            logger.debug(f"Attempting to use AiohttpClientWrapper for {backend_url}")
-            client_wrapper = AiohttpClientWrapper()
-            if not client_wrapper.async_client:
-                logger.debug(f"Starting AiohttpClientWrapper session for {backend_url}")
-                await client_wrapper.start()
-            client = client_wrapper()
-            logger.debug(f"Using AiohttpClientWrapper for {backend_url}")
-
-        except ImportError:
-            # Fallback to creating our own client
-            logger.debug(f"AiohttpClientWrapper not available, creating new session for {backend_url}")
-            client = aiohttp.ClientSession()
-            logger.debug(f"Created new aiohttp.ClientSession for {backend_url}")
-
-        try:
-            headers = {}
-            if openai_api_key := os.getenv("OPENAI_API_KEY"):
-                headers["Authorization"] = f"Bearer {openai_api_key}"
-                logger.debug(f"Using OpenAI API key for authentication with {backend_url}")
-            else:
-                logger.debug(f"No OpenAI API key found, proceeding without authentication for {backend_url}")
-                
-            logger.debug(f"Sending GET request to {models_url} with timeout {self.timeout}s")
-            async with client.get(
-                models_url, headers=headers, timeout=aiohttp.ClientTimeout(total=self.timeout)
-            ) as response:
-                logger.debug(f"Received response from {models_url}: HTTP {response.status}")
-                
-                if response.status == 200:
-                    logger.debug(f"Backend health check SUCCESS: {backend_url} (HTTP {response.status})")
-                    logger.info(f"Discovered healthy backend: {backend_url}")
-                    return backend_url
+        # Create a new session for each health check since we run in a separate event loop
+        async with aiohttp.ClientSession() as client:
+            try:
+                headers = {}
+                if openai_api_key := os.getenv("OPENAI_API_KEY"):
+                    headers["Authorization"] = f"Bearer {openai_api_key}"
+                    logger.debug(f"Using OpenAI API key for authentication with {backend_url}")
                 else:
-                    logger.debug(f"Backend health check FAILED: {backend_url} (HTTP {response.status})")
-                    logger.debug(f"Response headers for {backend_url}: {dict(response.headers)}")
-                    return None
+                    logger.debug(f"No OpenAI API key found, proceeding without authentication for {backend_url}")
 
-        except asyncio.TimeoutError:
-            logger.debug(f"Backend health check TIMEOUT: {backend_url} (timeout: {self.timeout}s)")
-            return None
-        except aiohttp.ClientError as e:
-            logger.debug(f"Backend health check CLIENT ERROR: {backend_url} - {type(e).__name__}: {e}")
-            return None
-        except Exception as e:
-            logger.debug(f"Backend health check UNEXPECTED ERROR: {backend_url} - {type(e).__name__}: {e}")
-            return None
-        finally:
-            # Only close client if we created it ourselves
-            if "client_wrapper" not in locals():
-                logger.debug(f"Closing aiohttp client for {backend_url}")
-                await client.close()
+                logger.debug(f"Sending GET request to {models_url} with timeout {self.timeout}s")
+                async with client.get(
+                    models_url, headers=headers, timeout=aiohttp.ClientTimeout(total=self.timeout)
+                ) as response:
+                    logger.debug(f"Received response from {models_url}: HTTP {response.status}")
+
+                    if response.status == 200:
+                        logger.debug(f"Backend health check SUCCESS: {backend_url} (HTTP {response.status})")
+                        logger.info(f"Discovered healthy backend: {backend_url}")
+                        return backend_url
+                    else:
+                        logger.debug(f"Backend health check FAILED: {backend_url} (HTTP {response.status})")
+                        logger.debug(f"Response headers for {backend_url}: {dict(response.headers)}")
+                        return None
+
+            except asyncio.TimeoutError:
+                logger.debug(f"Backend health check TIMEOUT: {backend_url} (timeout: {self.timeout}s)")
+                return None
+            except aiohttp.ClientError as e:
+                logger.debug(f"Backend health check CLIENT ERROR: {backend_url} - {type(e).__name__}: {e}")
+                return None
+            except Exception as e:
+                logger.debug(f"Backend health check UNEXPECTED ERROR: {backend_url} - {type(e).__name__}: {e}")
+                return None
 
     async def discover_backends(self) -> List[str]:
         """
