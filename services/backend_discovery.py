@@ -133,7 +133,7 @@ class BackendDiscoveryService:
 
             logger.debug(f"Attempting to use AiohttpClientWrapper for {backend_url}")
             client_wrapper = AiohttpClientWrapper()
-            if not client_wrapper._session:
+            if not client_wrapper.async_client:
                 logger.debug(f"Starting AiohttpClientWrapper session for {backend_url}")
                 await client_wrapper.start()
             client = client_wrapper()
