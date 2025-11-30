@@ -22,16 +22,6 @@ from vllm_router.parsers.yaml_utils import (
 )
 from vllm_router.version import __version__
 
-try:
-    from vllm_router.experimental.semantic_cache_integration import (
-        add_semantic_cache_args,
-    )
-
-    semantic_cache_available = True
-except ImportError:
-    semantic_cache_available = False
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -312,9 +302,6 @@ def parse_args():
         version=f"%(prog)s {__version__}",
         help="Show version and exit",
     )
-
-    if semantic_cache_available:
-        add_semantic_cache_args(parser)
 
     # Add feature gates argument
     parser.add_argument(

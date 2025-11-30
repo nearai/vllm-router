@@ -22,13 +22,13 @@ from cachetools import TTLCache
 from fastapi import Depends, FastAPI
 
 from vllm_router.aiohttp_client import AiohttpClientWrapper
+from vllm_router.httpx_client import HttpxClientWrapper
 from vllm_router.auth import verify_admin_access, verify_user_access
 from vllm_router.dynamic_config import (
     DynamicRouterConfig,
     get_dynamic_config_watcher,
     initialize_dynamic_config_watcher,
 )
-from vllm_router.experimental import get_feature_gates, initialize_feature_gates
 from vllm_router.parsers.parser import parse_args
 from vllm_router.routers.batches_router import batches_router
 from vllm_router.routers.config_router import config_router
@@ -74,27 +74,13 @@ from vllm_router.services.backend_discovery import (
     initialize_backend_discovery,
 )
 
-try:
-    # Semantic cache integration
-    from vllm_router.experimental.semantic_cache import (
-        enable_semantic_cache,
-        initialize_semantic_cache,
-        is_semantic_cache_enabled,
-    )
-    from vllm_router.experimental.semantic_cache_integration import (
-        semantic_cache_size,
-    )
-
-    semantic_cache_available = True
-except ImportError:
-    semantic_cache_available = False
-
 logger = logging.getLogger("uvicorn")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.aiohttp_client_wrapper.start()
+    app.state.httpx_client_wrapper.start()
     if hasattr(app.state, "batch_processor"):
         await app.state.batch_processor.initialize()
 
@@ -105,6 +91,7 @@ async def lifespan(app: FastAPI):
     app.state.event_loop = asyncio.get_event_loop()
 
     yield
+    await app.state.httpx_client_wrapper.stop()
     await app.state.aiohttp_client_wrapper.stop()
 
     # Close the threaded-components
@@ -246,63 +233,6 @@ def initialize_all(app: FastAPI, args):
         kv_aware_threshold=args.kv_aware_threshold,
     )
 
-    # Initialize feature gates
-    initialize_feature_gates(args.feature_gates)
-    # Check if the SemanticCache feature gate is enabled
-    feature_gates = get_feature_gates()
-    if semantic_cache_available:
-        if feature_gates.is_enabled("SemanticCache"):
-            # The feature gate is enabled, explicitly enable the semantic cache
-            enable_semantic_cache()
-
-            # Verify that the semantic cache was successfully enabled
-            if not is_semantic_cache_enabled():
-                logger.error("Failed to enable semantic cache feature")
-
-            logger.info("SemanticCache feature gate is enabled")
-
-            # Initialize the semantic cache with the model if specified
-            if args.semantic_cache_model:
-                logger.info(
-                    f"Initializing semantic cache with model: {args.semantic_cache_model}"
-                )
-                logger.info(
-                    f"Semantic cache directory: {args.semantic_cache_dir or 'default'}"
-                )
-                logger.info(
-                    f"Semantic cache threshold: {args.semantic_cache_threshold}"
-                )
-
-                cache = initialize_semantic_cache(
-                    embedding_model=args.semantic_cache_model,
-                    cache_dir=args.semantic_cache_dir,
-                    default_similarity_threshold=args.semantic_cache_threshold,
-                )
-
-                # Update cache size metric
-                if cache and hasattr(cache, "db") and hasattr(cache.db, "index"):
-                    semantic_cache_size.labels(server="router").set(
-                        cache.db.index.ntotal
-                    )
-                    logger.info(
-                        f"Semantic cache initialized with {cache.db.index.ntotal} entries"
-                    )
-
-                logger.info(
-                    f"Semantic cache initialized with model {args.semantic_cache_model}"
-                )
-            else:
-                logger.warning(
-                    "SemanticCache feature gate is enabled but no embedding model specified. "
-                    "The semantic cache will not be functional without an embedding model. "
-                    "Use --semantic-cache-model to specify an embedding model."
-                )
-        elif args.semantic_cache_model:
-            logger.warning(
-                "Semantic cache model specified but SemanticCache feature gate is not enabled. "
-                "Enable the feature gate with --feature-gates=SemanticCache=true"
-            )
-
     # --- Hybrid addition: attach singletons to FastAPI state ---
     app.state.engine_stats_scraper = get_engine_stats_scraper()
     app.state.request_stats_monitor = get_request_stats_monitor()
@@ -332,7 +262,7 @@ app.include_router(batches_router, dependencies=[Depends(verify_user_access)])
 app.include_router(metrics_router, dependencies=[Depends(verify_admin_access)])
 app.include_router(config_router, dependencies=[Depends(verify_admin_access)])
 app.state.aiohttp_client_wrapper = AiohttpClientWrapper()
-app.state.semantic_cache_available = semantic_cache_available
+app.state.httpx_client_wrapper = HttpxClientWrapper()
 
 
 def main():

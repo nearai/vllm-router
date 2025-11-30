@@ -29,16 +29,6 @@ from vllm_router.services.request_service.request import (
     route_sleep_wakeup_request,
 )
 
-try:
-    # Semantic cache integration
-    from vllm_router.experimental.semantic_cache_integration import (
-        check_semantic_cache,
-    )
-
-    semantic_cache_available = True
-except ImportError:
-    semantic_cache_available = False
-
 main_router = APIRouter()
 
 logger = init_logger(__name__)
@@ -46,16 +36,6 @@ logger = init_logger(__name__)
 
 @main_router.post("/v1/chat/completions")
 async def route_chat_completion(request: Request, background_tasks: BackgroundTasks):
-    if semantic_cache_available:
-        # Check if the request can be served from the semantic cache
-        logger.debug("Received chat completion request, checking semantic cache")
-        cache_response = await check_semantic_cache(request=request)
-
-        if cache_response:
-            logger.info("Serving response from semantic cache")
-            return cache_response
-
-    logger.debug("No cache hit, forwarding request to backend")
     return await route_general_request(
         request, "/v1/chat/completions", background_tasks
     )

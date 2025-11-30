@@ -19,7 +19,7 @@ import time
 import uuid
 from typing import Optional
 
-import aiohttp
+import httpx
 from fastapi import BackgroundTasks, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from requests import JSONDecodeError
@@ -37,16 +37,6 @@ from vllm_router.services.request_service.rewriter import (
     is_request_rewriter_initialized,
 )
 from vllm_router.utils import replace_model_in_request_body, update_content_length
-
-try:
-    # Semantic cache integration
-    from vllm_router.experimental.semantic_cache_integration import (
-        store_in_semantic_cache,
-    )
-
-    semantic_cache_available = True
-except ImportError:
-    semantic_cache_available = False
 
 from vllm_router.services.metrics_service import num_incoming_requests_total
 
@@ -124,17 +114,17 @@ async def process_request(
     chat_id_found = False
     chat_cache = getattr(request.app.state, "chat_cache", None)
 
-    async with request.app.state.aiohttp_client_wrapper().request(
+    client = request.app.state.httpx_client_wrapper()
+    async with client.stream(
         method=request.method,
         url=backend_url + endpoint,
         headers=headers,
-        data=body,
-        timeout=aiohttp.ClientTimeout(total=None),
+        content=body,
     ) as backend_response:
         # Yield headers and status code first.
-        yield backend_response.headers, backend_response.status
+        yield dict(backend_response.headers), backend_response.status_code
         # Stream response content.
-        async for chunk in backend_response.content.iter_any():
+        async for chunk in backend_response.aiter_bytes():
             total_len += len(chunk)
             if not first_token:
                 first_token = True
@@ -189,11 +179,6 @@ async def process_request(
     #    logger.debug(f"Finished the request with request id: {debug_request.headers.get('x-request-id', None)} at {time.time()}")
     # Store in semantic cache if applicable
     # Use the full response for non-streaming requests, or the last chunk for streaming
-    if request.app.state.semantic_cache_available:
-        cache_chunk = bytes(full_response) if not is_streaming else chunk
-        await store_in_semantic_cache(
-            endpoint=endpoint, method=request.method, body=body, chunk=cache_chunk
-        )
     if background_tasks and getattr(request.app.state, "callbacks", None):
         background_tasks.add_task(
             request.app.state.callbacks.post_request, request, full_response
@@ -223,7 +208,6 @@ async def route_general_request(
             request, endpoint, background_tasks
         )
         return response
-    in_router_time = time.time()
     # Same as vllm, Get request_id from X-Request-Id header if available
     request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
     request_body = await request.body()
@@ -342,22 +326,13 @@ async def route_general_request(
             endpoints, engine_stats, request_stats, request
         )
 
-    curr_time = time.time()
     # Extract actual session ID from request headers for logging
-    session_key = getattr(request.app.state.router, "session_key", None)
     session_id = request.app.state.router.extract_session_id(request, request_json)
     session_id_display = session_id if session_id is not None else "None"
 
-    # Debug logging to help troubleshoot session ID extraction
-    logger.debug(
-        f"Debug session extraction - Router type: {type(request.app.state.router).__name__}"
-    )
-    logger.debug(f"Debug session extraction - Session key config: {session_key}")
-    logger.debug(f"Debug session extraction - Request headers: {dict(request.headers)}")
-    logger.debug(f"Debug session extraction - Extracted session ID: {session_id}")
-
+    logger.debug(f"Routing request {request_id} for model: {requested_model}")
     logger.info(
-        f"Routing request {request_id} with session id {session_id_display} to {server_url} at {curr_time}, process time = {curr_time - in_router_time:.4f}"
+        f"Routing request {request_id} with session id {session_id_display} to {server_url}"
     )
     stream_generator = process_request(
         request,
@@ -379,7 +354,7 @@ async def route_general_request(
 
 
 async def send_request_to_prefiller(
-    client: aiohttp.ClientSession, endpoint: str, req_data: dict, request_id: str
+    client: httpx.AsyncClient, endpoint: str, req_data: dict, request_id: str
 ):
     """Send a request to a prefiller service."""
     req_data = req_data.copy()
@@ -392,13 +367,13 @@ async def send_request_to_prefiller(
         "X-Request-Id": request_id,
     }
 
-    async with client.post(endpoint, json=req_data, headers=headers) as response:
-        response.raise_for_status()
-        return await response.json()
+    response = await client.post(endpoint, json=req_data, headers=headers)
+    response.raise_for_status()
+    return response.json()
 
 
 async def send_request_to_decode(
-    client: aiohttp.ClientSession, endpoint: str, req_data: dict, request_id: str
+    client: httpx.AsyncClient, endpoint: str, req_data: dict, request_id: str
 ):
     """Asynchronously stream the response from a service using a persistent client."""
     headers = {
@@ -406,9 +381,9 @@ async def send_request_to_decode(
         "X-Request-Id": request_id,
     }
 
-    async with client.post(endpoint, json=req_data, headers=headers) as response:
+    async with client.stream("POST", endpoint, json=req_data, headers=headers) as response:
         response.raise_for_status()
-        async for chunk in response.content.iter_any():
+        async for chunk in response.aiter_bytes():
             yield chunk
 
 
@@ -435,15 +410,15 @@ async def route_disaggregated_prefill_request(
             f"Routing request {request_id} with session id None to {request.app.state.prefill_client._base_url} at {et}, process time = {et - in_router_time:.4f}"
         )
         request_json["max_tokens"] = orig_max_tokens
-    except aiohttp.ClientResponseError as e:
+    except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error in prefiller: {e}", exc_info=True)
         return JSONResponse(
-            status_code=e.status,
+            status_code=e.response.status_code,
             content={
                 "error": {
-                    "message": f"Prefiller error: {e.message}",
+                    "message": f"Prefiller error: {str(e)}",
                     "type": "prefiller_error",
-                    "code": e.status,
+                    "code": e.response.status_code,
                 }
             },
             headers={"X-Request-Id": request_id},
@@ -468,18 +443,15 @@ async def route_disaggregated_prefill_request(
                 request.app.state.decode_client, endpoint, request_json, request_id
             ):
                 yield chunk
-        except aiohttp.ClientResponseError as e:
+        except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error in decoder: {e}", exc_info=True)
-            try:
-                error_text = e.message
-            except Exception:
-                error_text = f"HTTP {e.status}"
+            error_text = str(e)
             # Yield error as JSON response
             error_response = {
                 "error": {
                     "message": f"Decoder error: {error_text}",
                     "type": "decoder_error",
-                    "code": e.status,
+                    "code": e.response.status_code,
                 }
             }
             yield json.dumps(error_response).encode("utf-8")
@@ -555,35 +527,31 @@ async def route_sleep_wakeup_request(
 
     url = server_url + endpoint
 
-    async with aiohttp.ClientSession() as client:
-        if endpoint == "/is_sleeping":
-            async with client.get(url, headers=headers) as response:
-                response.raise_for_status()
-                return await response.json()
+    client = request.app.state.httpx_client_wrapper()
+    if endpoint == "/is_sleeping":
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
+        return response.json()
+    else:
+        request_body = await request.body()
+        if request_body:
+            req_data = json.loads(request_body)
+            response = await client.post(url, json=req_data, headers=headers)
         else:
-            request_body = await request.body()
-            response_status = None
-            if request_body:
-                req_data = json.loads(request_body)
-                async with client.post(url, json=req_data, headers=headers) as response:
-                    response.raise_for_status()
-                    response_status = response.status
-            else:
-                async with client.post(url, headers=headers) as response:
-                    response.raise_for_status()
-                    response_status = response.status
+            response = await client.post(url, headers=headers)
+        response.raise_for_status()
 
-            pod_name = endpoints[0].pod_name
-            if endpoint == "/sleep":
-                service_discovery.add_sleep_label(pod_name)
-            elif endpoint == "/wake_up":
-                service_discovery.remove_sleep_label(pod_name)
+        pod_name = endpoints[0].pod_name
+        if endpoint == "/sleep":
+            service_discovery.add_sleep_label(pod_name)
+        elif endpoint == "/wake_up":
+            service_discovery.remove_sleep_label(pod_name)
 
-            return JSONResponse(
-                status_code=response_status,
-                content={"status": "success"},
-                headers={"X-Request-Id": request_id},
-            )
+        return JSONResponse(
+            status_code=response.status_code,
+            content={"status": "success"},
+            headers={"X-Request-Id": request_id},
+        )
 
 
 async def route_general_transcriptions(
@@ -687,28 +655,23 @@ async def route_general_transcriptions(
     logger.info("Proxying transcription request for model %s to %s", model, chosen_url)
 
     try:
-        client = request.app.state.aiohttp_client_wrapper()
+        client = request.app.state.httpx_client_wrapper()
 
-        form_data = aiohttp.FormData()
-
-        # add file data
-        for key, (filename, content, content_type) in files.items():
-            form_data.add_field(
-                key, content, filename=filename, content_type=content_type
-            )
-
-        # add from data
-        for key, value in data.items():
-            form_data.add_field(key, value)
+        # httpx uses 'files' dict for multipart file upload
+        httpx_files = {
+            key: (filename, content, content_type)
+            for key, (filename, content, content_type) in files.items()
+        }
 
         backend_response = await client.post(
             f"{chosen_url}{endpoint}",
-            data=form_data,
-            timeout=aiohttp.ClientTimeout(total=300),
+            files=httpx_files,
+            data=data,
+            timeout=300.0,
         )
 
         # --- 4. Return the response ---
-        response_content = await backend_response.json()
+        response_content = backend_response.json()
         headers = {
             k: v
             for k, v in backend_response.headers.items()
@@ -719,32 +682,20 @@ async def route_general_transcriptions(
 
         return JSONResponse(
             content=response_content,
-            status_code=backend_response.status,
+            status_code=backend_response.status_code,
             headers=headers,
         )
-    except aiohttp.ClientResponseError as response_error:
-        if response_error.response is not None:
-            try:
-                error_content = await response_error.response.json()
-            except (
-                aiohttp.ContentTypeError,
-                json.JSONDecodeError,
-                aiohttp.ClientError,
-            ):
-                # If JSON parsing fails, get text content
-                try:
-                    text_content = await response_error.response.text()
-                    error_content = {"error": text_content}
-                except aiohttp.ClientError:
-                    error_content = {
-                        "error": f"HTTP {response_error.status}: {response_error.message}"
-                    }
-        else:
-            error_content = {
-                "error": f"HTTP {response_error.status}: {response_error.message}"
-            }
-        return JSONResponse(status_code=response_error.status, content=error_content)
-    except aiohttp.ClientError as client_error:
+    except httpx.HTTPStatusError as response_error:
+        try:
+            error_content = response_error.response.json()
+        except json.JSONDecodeError:
+            # If JSON parsing fails, get text content
+            text_content = response_error.response.text
+            error_content = {"error": text_content}
+        return JSONResponse(
+            status_code=response_error.response.status_code, content=error_content
+        )
+    except httpx.RequestError as client_error:
         return JSONResponse(
             status_code=503,
             content={"error": f"Failed to connect to backend: {str(client_error)}"},

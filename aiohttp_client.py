@@ -41,13 +41,15 @@ class AiohttpClientWrapper:
         connector = TCPConnector(
             limit=0,  # Unlimited connections for concurrency
             ttl_dns_cache=DNS_CACHE_TTL,  # Cache DNS lookups for 5 minutes
-            keepalive_timeout=30,  # Keep connections alive for reuse
+            keepalive_timeout=120,  # Keep connections alive for reuse (increased from 30)
+            enable_cleanup_closed=True,  # Clean up closed connections
             resolver=resolver,
         )
         self.async_client = aiohttp.ClientSession(connector=connector)
+        self.connector = connector  # Keep reference for stats logging
         logger.info(
-            f"aiohttp ClientSession instantiated with DNS caching (TTL={DNS_CACHE_TTL}s). "
-            f"Id {id(self.async_client)}"
+            f"aiohttp ClientSession instantiated with DNS caching (TTL={DNS_CACHE_TTL}s), "
+            f"keepalive_timeout=120s. Id {id(self.async_client)}"
         )
 
     async def stop(self):

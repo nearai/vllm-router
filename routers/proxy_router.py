@@ -61,7 +61,7 @@ async def attestation_report(
 
     async def fetch_attestation(url: str):
         try:
-            client = request.app.state.aiohttp_client_wrapper()
+            client = request.app.state.httpx_client_wrapper()
             # Pass query params
             params = {}
             if signing_algo:
@@ -74,15 +74,15 @@ async def attestation_report(
             headers = {}
             headers["Authorization"] = f"Bearer {os.environ.get('OPENAI_API_KEY')}"
 
-            async with client.get(
+            resp = await client.get(
                 f"{url}/v1/attestation/report",
                 params=params,
                 headers=headers,
                 timeout=TIMEOUT,
-            ) as resp:
-                if resp.status == 200:
-                    return await resp.json()
-                return None
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            return None
         except Exception as e:
             logger.warning(f"Failed to fetch attestation from {url}: {e}")
             return None
@@ -136,7 +136,7 @@ async def get_signature(
 
     async def fetch_signature(url: str):
         try:
-            client = request.app.state.aiohttp_client_wrapper()
+            client = request.app.state.httpx_client_wrapper()
             params = {}
             if signing_algo:
                 params["signing_algo"] = signing_algo
@@ -144,15 +144,15 @@ async def get_signature(
             headers = {}
             headers["Authorization"] = f"Bearer {os.environ.get('OPENAI_API_KEY')}"
 
-            async with client.get(
+            resp = await client.get(
                 f"{url}/v1/signature/{chat_id}",
                 params=params,
                 headers=headers,
                 timeout=TIMEOUT,
-            ) as resp:
-                if resp.status == 200:
-                    return await resp.json()
-                return None
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            return None
         except Exception as e:
             logger.warning(f"Failed to fetch signature from {url}: {e}")
             return None
