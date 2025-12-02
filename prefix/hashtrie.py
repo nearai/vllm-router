@@ -14,6 +14,7 @@
 
 import asyncio
 import logging
+import threading
 from typing import Generator, Set, Tuple
 
 import xxhash
@@ -25,10 +26,9 @@ class TrieNode:
     def __init__(self):
         self.children = {}
         self.endpoints = set()
-        # Lock only needed for write operations (insert).
-        # Reads are lock-free since dict.get() and set operations are atomic
-        # under Python's GIL for simple lookups.
-        self.lock = asyncio.Lock()
+        # Lock for both read and write operations to prevent race conditions
+        # Dictionary operations and iteration are not atomic across multiple steps
+        self.lock = threading.Lock()
 
 
 class HashTrie:
@@ -62,14 +62,14 @@ class HashTrie:
             endpoint (str): The endpoint to insert.
         """
         node = self.root
-        async with node.lock:
+        with node.lock:
             node.endpoints.add(endpoint)
         for chunk_hash in self._chunk_and_hash(request):
-            async with node.lock:
+            with node.lock:
                 if chunk_hash not in node.children:
                     node.children[chunk_hash] = TrieNode()
                 node = node.children[chunk_hash]
-            async with node.lock:
+            with node.lock:
                 node.endpoints.add(endpoint)
 
     def longest_prefix_match(
@@ -77,7 +77,6 @@ class HashTrie:
     ) -> Tuple[int, Set[str]]:
         """
         Find the longest matching prefix using hashed chunks.
-        This is a lock-free read operation for better concurrency.
         Args:
             request (str): The request to find the longest matching prefix.
             available_endpoints (Set[str]): The endpoints that are available.
@@ -87,12 +86,14 @@ class HashTrie:
         selected_endpoints = available_endpoints
 
         for chunk_hash in self._chunk_and_hash(request):
-            # Lock-free read: dict.get() is atomic under Python's GIL
-            node = node.children.get(chunk_hash)
-            if not node:
-                break
-            # Lock-free read: set copy is atomic for iteration purposes
-            endpoints = node.endpoints.copy()
+            with node.lock:
+                next_node = node.children.get(chunk_hash)
+                if not next_node:
+                    break
+                # Copy endpoints while holding the lock to ensure consistency
+                endpoints = node.endpoints.copy()
+            
+            node = next_node
             intersection = endpoints.intersection(selected_endpoints)
             # reached longest prefix match in currently-available endpoints.
             if not intersection:

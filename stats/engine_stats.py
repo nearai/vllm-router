@@ -109,7 +109,8 @@ class EngineStatsScraper(metaclass=SingletonMeta):
         self.engine_stats: Dict[str, EngineStats] = {}
         self.engine_stats_lock = threading.Lock()
         # Cached immutable snapshot for lock-free reads
-        self._cached_stats: Dict[str, EngineStats] = {}
+        # Initialize with the same state as engine_stats for consistency
+        self._cached_stats: Dict[str, EngineStats] = self.engine_stats.copy()
         self.scrape_interval = scrape_interval
 
         # scrape thread

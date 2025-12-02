@@ -109,7 +109,13 @@ async def process_request(
 
     client_wrapper = request.app.state.httpx_client_wrapper
     client = client_wrapper()
-    pool_size_before = client_wrapper.get_pool_size()
+    # Track connection identities before the request to detect new connections.
+    # This approach uses connection identity tracking rather than simple pool size
+    # checking to reduce race conditions. However, it's still best-effort because:
+    # - Other concurrent requests may create/close connections between our checks
+    # - Connection pooling behavior depends on the underlying HTTP library
+    # - In highly concurrent scenarios, false positives/negatives are still possible
+    conn_ids_before = client_wrapper.get_connection_ids()
     pre_backend_time = time.time()
     async with client.stream(
         method=request.method,
@@ -119,21 +125,23 @@ async def process_request(
     ) as backend_response:
         # This measures: connection acquisition + request send + backend TTFB
         time_to_response_headers = time.time() - pre_backend_time
-        pool_size_after = client_wrapper.get_pool_size()
+        conn_ids_after = client_wrapper.get_connection_ids()
         http_version = backend_response.http_version
-        # Detect if a new connection was created
-        new_connection = pool_size_after > pool_size_before
+        # Detect if a new connection was created by checking for new connection IDs
+        # This is more reliable than pool size checking but still best-effort in concurrent environments
+        new_connections = conn_ids_after - conn_ids_before
+        new_connection = len(new_connections) > 0
         if new_connection:
             logger.debug(
                 f"[{request_id}] NEW connection to {backend_url}: "
                 f"TTFB={time_to_response_headers*1000:.2f}ms "
-                f"({http_version}, pool: {pool_size_before}->{pool_size_after})"
+                f"({http_version}, new_conns={len(new_connections)}, total_pool={len(conn_ids_after)})"
             )
         else:
             logger.debug(
                 f"[{request_id}] reused connection to {backend_url}: "
                 f"TTFB={time_to_response_headers*1000:.2f}ms "
-                f"({http_version}, pool: {pool_size_after})"
+                f"({http_version}, pool_size={len(conn_ids_after)})"
             )
         # Yield headers and status code first.
         yield dict(backend_response.headers), backend_response.status_code

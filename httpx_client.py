@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import time
-from typing import Dict
+from typing import Dict, Set, Optional
 
 import httpx
 
@@ -35,6 +35,47 @@ def _get_pool_size(transport) -> int:
     except Exception:
         pass
     return -1
+
+
+def _get_connection_ids(transport) -> Set[str]:
+    """
+    Get a set of unique connection identifiers from the transport pool.
+
+    This function creates unique identifiers for each connection in the pool
+    based on the connection object's identity and remote address. This allows
+    us to track individual connections rather than just counting pool size,
+    which helps reduce (but not eliminate) race conditions in connection
+    creation detection.
+
+    Note: This is a best-effort approach. In highly concurrent environments,
+    there may still be race conditions where:
+    - Connection A is created by Request 1
+    - Connection B is created by Request 2
+    - Connection A is closed before we check connection IDs
+    - Both requests might incorrectly think they created new connections
+
+    Returns:
+        Set[str]: A set of unique connection identifiers, or empty set if
+                 connection tracking is not available.
+    """
+    try:
+        if hasattr(transport, "_pool") and transport._pool:
+            pool = transport._pool
+            if hasattr(pool, "connections"):
+                # Create unique IDs based on connection object identity and remote address
+                conn_ids = set()
+                for conn in pool.connections:
+                    # Use a combination of object id and remote address for uniqueness
+                    remote_addr = getattr(conn, "_remote_addr", None)
+                    if remote_addr:
+                        conn_id = f"{id(conn)}:{remote_addr}"
+                    else:
+                        conn_id = str(id(conn))
+                    conn_ids.add(conn_id)
+                return conn_ids
+    except Exception as e:
+        logger.debug(f"Failed to get connection IDs: {e}")
+    return set()
 
 
 class HttpxClientWrapper:
@@ -72,6 +113,10 @@ class HttpxClientWrapper:
         """Get the current connection pool size."""
         return _get_pool_size(self._transport)
 
+    def get_connection_ids(self) -> Set[str]:
+        """Get a set of unique connection identifiers from the pool."""
+        return _get_connection_ids(self._transport)
+
     def log_pool_status(self, context: str = ""):
         """Log the current connection pool status."""
         pool_size = self.get_pool_size()
@@ -84,9 +129,7 @@ class HttpxClientWrapper:
     async def stop(self):
         """Gracefully shutdown. Call from FastAPI shutdown hook."""
         if self.async_client:
-            logger.info(
-                f"Closing httpx AsyncClient. Id: {id(self.async_client)}"
-            )
+            logger.info(f"Closing httpx AsyncClient. Id: {id(self.async_client)}")
             await self.async_client.aclose()
             self.async_client = None
             logger.info("httpx AsyncClient closed")
