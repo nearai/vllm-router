@@ -24,3 +24,5 @@ services:
       --routing-logic prefixaware
       --port 80
       --service-discovery static
+      --log-level info
+      --log-format text

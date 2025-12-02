@@ -145,7 +145,13 @@ def initialize_all(app: FastAPI, args):
     
     log_level = log_level_map.get(args.log_level.lower(), logging.INFO)
     root_logger = init_logger("vllm_router", log_level=log_level, log_format=args.log_format)
-    
+
+    # Reconfigure all existing vllm_router loggers to use the same level and format
+    # (they were created at module import time with default values)
+    for name in list(logging.Logger.manager.loggerDict.keys()):
+        if name.startswith("vllm_router"):
+            init_logger(name, log_level=log_level, log_format=args.log_format)
+
     # Configure uvicorn logger to use the same format
     uvicorn_logger = logging.getLogger("uvicorn")
     uvicorn_logger.handlers.clear()
