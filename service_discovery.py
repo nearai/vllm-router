@@ -217,21 +217,23 @@ class StaticServiceDiscovery(ServiceDiscovery):
         backend_health_check_timeout_seconds: int = 10,
     ):
         self.app = app
-        
+
         # Handle empty backend configuration
         if urls is None:
             urls = []
         if models is None:
             models = []
-            
+
         # Validate that if both are provided, they have the same length
         if urls and models:
-            assert len(urls) == len(models), "URLs and models should have the same length"
+            assert len(urls) == len(
+                models
+            ), "URLs and models should have the same length"
         elif urls and not models:
             raise ValueError("Models must be provided when URLs are specified")
         elif models and not urls:
             raise ValueError("URLs must be provided when models are specified")
-            
+
         self.urls = urls
         self.models = models
         self.aliases = aliases
@@ -260,10 +262,14 @@ class StaticServiceDiscovery(ServiceDiscovery):
     async def add_backend(self, url: str):
         logger.info(f"add_backend called with url: {url}")
         try:
-            logger.debug(f"creating aiohttp session to fetch models from {url}/v1/models")
+            logger.debug(
+                f"creating aiohttp session to fetch models from {url}/v1/models"
+            )
             async with aiohttp.ClientSession() as session:
                 async with session.get(f"{url}/v1/models") as response:
-                    logger.debug(f"received response from {url}/v1/models with status: {response.status}")
+                    logger.debug(
+                        f"received response from {url}/v1/models with status: {response.status}"
+                    )
                     if response.status != 200:
                         logger.error(
                             f"failed to fetch models from {url}: HTTP {response.status}"
@@ -272,7 +278,9 @@ class StaticServiceDiscovery(ServiceDiscovery):
 
                     data = await response.json()
                     models_data = data.get("data", [])
-                    logger.info(f"fetched {len(models_data)} models from {url}: {[m.get('id') for m in models_data]}")
+                    logger.info(
+                        f"fetched {len(models_data)} models from {url}: {[m.get('id') for m in models_data]}"
+                    )
 
             with self._lock:
                 logger.debug(f"acquired lock, current backends count: {len(self.urls)}")
@@ -282,7 +290,9 @@ class StaticServiceDiscovery(ServiceDiscovery):
                 for model_data in models_data:
                     model_id = model_data.get("id")
                     if not model_id:
-                        logger.warning(f"skipping model from {url} with no id: {model_data}")
+                        logger.warning(
+                            f"skipping model from {url} with no id: {model_data}"
+                        )
                         continue
 
                     # Check if specific combination exists
@@ -301,10 +311,14 @@ class StaticServiceDiscovery(ServiceDiscovery):
                     models_to_add.append(model_id)
 
                 if not models_to_add:
-                    logger.info(f"no new models to add from {url}, all models already registered")
+                    logger.info(
+                        f"no new models to add from {url}, all models already registered"
+                    )
                     return
 
-                logger.info(f"adding {len(models_to_add)} new models from {url}: {models_to_add}")
+                logger.info(
+                    f"adding {len(models_to_add)} new models from {url}: {models_to_add}"
+                )
 
                 for model_id in models_to_add:
                     self.urls.append(url)
@@ -319,16 +333,23 @@ class StaticServiceDiscovery(ServiceDiscovery):
                         self.model_types.append("default")
                         logger.debug(f"appended default model_type for {model_id}")
 
-                    logger.info(f"successfully added backend {url} with model {model_id}")
+                    logger.info(
+                        f"successfully added backend {url} with model {model_id}"
+                    )
 
-                logger.info(f"backend registration complete, total backends: {len(self.urls)}")
+                logger.info(
+                    f"backend registration complete, total backends: {len(self.urls)}"
+                )
 
         except aiohttp.ClientError as e:
             logger.error(f"network error adding backend {url}: {type(e).__name__}: {e}")
         except asyncio.TimeoutError:
             logger.error(f"timeout error adding backend {url}")
         except Exception as e:
-            logger.error(f"unexpected error adding backend {url}: {type(e).__name__}: {e}", exc_info=True)
+            logger.error(
+                f"unexpected error adding backend {url}: {type(e).__name__}: {e}",
+                exc_info=True,
+            )
 
     def remove_backend(self, url: str):
         with self._lock:
@@ -375,23 +396,31 @@ class StaticServiceDiscovery(ServiceDiscovery):
                     health_check_results.append(("inference", model_healthy))
                     if not model_healthy:
                         is_healthy = False
-                        logger.debug(f"Model inference check failed for {model} at {url}")
+                        logger.debug(
+                            f"Model inference check failed for {model} at {url}"
+                        )
 
                 # Check 2: Models endpoint availability
                 if self.health_check_include_models_endpoint:
-                    models_list = utils.fetch_models_list(url, self.backend_health_check_timeout)
+                    models_list = utils.fetch_models_list(
+                        url, self.backend_health_check_timeout
+                    )
                     models_available = models_list is not None
                     health_check_results.append(("models_endpoint", models_available))
                     if not models_available:
                         is_healthy = False
                         logger.debug(f"Models endpoint check failed for {url}")
                     elif models_list and model not in models_list:
-                        logger.warning(f"Model {model} no longer available at {url}. Available models: {models_list}")
+                        logger.warning(
+                            f"Model {model} no longer available at {url}. Available models: {models_list}"
+                        )
                         is_healthy = False
 
                 # Check 3: Attestation endpoint availability
                 if self.health_check_include_attestation:
-                    attestation_available = utils.check_attestation_available(url, self.backend_health_check_timeout)
+                    attestation_available = utils.check_attestation_available(
+                        url, self.backend_health_check_timeout
+                    )
                     health_check_results.append(("attestation", attestation_available))
                     if not attestation_available:
                         is_healthy = False
@@ -405,7 +434,9 @@ class StaticServiceDiscovery(ServiceDiscovery):
                     logger.debug(f"{model} at {url} is healthy")
                 else:
                     # Increment failure count
-                    self.backend_failure_counts[endpoint_hash] = self.backend_failure_counts.get(endpoint_hash, 0) + 1
+                    self.backend_failure_counts[endpoint_hash] = (
+                        self.backend_failure_counts.get(endpoint_hash, 0) + 1
+                    )
                     failure_count = self.backend_failure_counts[endpoint_hash]
 
                     logger.warning(
@@ -431,11 +462,16 @@ class StaticServiceDiscovery(ServiceDiscovery):
 
         # Remove backends that exceeded the failure threshold
         for url in set(backends_to_remove):
-            logger.info(f"Permanently removing backend {url} due to repeated health check failures")
+            logger.info(
+                f"Permanently removing backend {url} due to repeated health check failures"
+            )
             self.remove_backend(url)
             # Increment Prometheus counter for removed backends
             try:
-                from vllm_router.services.metrics_service import vllm_router_backends_removed_total
+                from vllm_router.services.metrics_service import (
+                    vllm_router_backends_removed_total,
+                )
+
                 vllm_router_backends_removed_total.inc()
             except ImportError:
                 pass  # Metrics service may not be available in all contexts
@@ -558,7 +594,9 @@ class StaticServiceDiscovery(ServiceDiscovery):
                     "healthy": is_healthy,
                     "failure_count": failure_count,
                     "failure_threshold": self.health_check_removal_threshold,
-                    "model_label": self.model_labels[i] if self.model_labels else "default",
+                    "model_label": (
+                        self.model_labels[i] if self.model_labels else "default"
+                    ),
                 }
 
                 if self.model_types:
@@ -606,26 +644,28 @@ class StaticServiceDiscovery(ServiceDiscovery):
         """
         Mark a backend as unhealthy during request processing.
         This is called when a backend fails to respond to a request.
-        
+
         Args:
             url: The backend URL that failed
             model: The model name that was being requested
-            
+
         Returns:
             bool: True if the backend should be removed from the pool, False otherwise
         """
         endpoint_hash = self.get_model_endpoint_hash(url, model)
-        
+
         with self._lock:
             # Increment failure count
-            self.backend_failure_counts[endpoint_hash] = self.backend_failure_counts.get(endpoint_hash, 0) + 1
+            self.backend_failure_counts[endpoint_hash] = (
+                self.backend_failure_counts.get(endpoint_hash, 0) + 1
+            )
             failure_count = self.backend_failure_counts[endpoint_hash]
-            
+
             logger.warning(
                 f"Backend {url} with model {model} failed during request processing. "
                 f"Failure count: {failure_count}/{self.health_check_removal_threshold}"
             )
-            
+
             # Check if we should remove this backend
             if failure_count >= self.health_check_removal_threshold:
                 logger.error(
@@ -633,23 +673,26 @@ class StaticServiceDiscovery(ServiceDiscovery):
                     f"({failure_count} >= {self.health_check_removal_threshold}). "
                     f"Removing from pool."
                 )
-                
+
                 # Add to unhealthy endpoints list
                 if endpoint_hash not in self.unhealthy_endpoint_hashes:
                     self.unhealthy_endpoint_hashes.append(endpoint_hash)
-                
+
                 # Remove from failure counts since it's now permanently unhealthy
                 del self.backend_failure_counts[endpoint_hash]
-                
+
                 # Increment Prometheus counter for removed backends
                 try:
-                    from vllm_router.services.metrics_service import vllm_router_backends_removed_total
+                    from vllm_router.services.metrics_service import (
+                        vllm_router_backends_removed_total,
+                    )
+
                     vllm_router_backends_removed_total.inc()
                 except ImportError:
                     pass  # Metrics service may not be available in all contexts
-                
+
                 return True
-            
+
             return False
 
 
