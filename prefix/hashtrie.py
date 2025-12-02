@@ -25,10 +25,9 @@ class TrieNode:
     def __init__(self):
         self.children = {}
         self.endpoints = set()
-
-        # assign a lock for each trie node.
-        # this assures that each node will only be accessed by one co-routine
-        # at a time.
+        # Lock only needed for write operations (insert).
+        # Reads are lock-free since dict.get() and set operations are atomic
+        # under Python's GIL for simple lookups.
         self.lock = asyncio.Lock()
 
 
@@ -73,11 +72,12 @@ class HashTrie:
             async with node.lock:
                 node.endpoints.add(endpoint)
 
-    async def longest_prefix_match(
+    def longest_prefix_match(
         self, request: str, available_endpoints: Set[str] = set()
     ) -> Tuple[int, Set[str]]:
         """
         Find the longest matching prefix using hashed chunks.
+        This is a lock-free read operation for better concurrency.
         Args:
             request (str): The request to find the longest matching prefix.
             available_endpoints (Set[str]): The endpoints that are available.
@@ -87,12 +87,12 @@ class HashTrie:
         selected_endpoints = available_endpoints
 
         for chunk_hash in self._chunk_and_hash(request):
-            async with node.lock:
-                node = node.children.get(chunk_hash)
+            # Lock-free read: dict.get() is atomic under Python's GIL
+            node = node.children.get(chunk_hash)
             if not node:
                 break
-            async with node.lock:
-                endpoints = node.endpoints.copy()
+            # Lock-free read: set copy is atomic for iteration purposes
+            endpoints = node.endpoints.copy()
             intersection = endpoints.intersection(selected_endpoints)
             # reached longest prefix match in currently-available endpoints.
             if not intersection:

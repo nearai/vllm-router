@@ -64,7 +64,7 @@ async def process_request(
     request_id,
     endpoint,
     background_tasks: BackgroundTasks,
-    debug_request=None,
+    is_streaming: bool = False,
 ):
     """
     Process a request by sending it to the chosen backend.
@@ -75,8 +75,7 @@ async def process_request(
         backend_url: The URL of the backend to send the request to.
         request_id: A unique identifier for the request.
         endpoint: The endpoint to send the request to on the backend.
-        debug_request: The original request object from the client, used for
-            optional debug logging.
+        is_streaming: Whether this is a streaming request.
 
     Yields:
         The response headers and status code, followed by the response content.
@@ -90,13 +89,6 @@ async def process_request(
     request.app.state.request_stats_monitor.on_new_request(
         backend_url, request_id, start_time
     )
-    # Check if this is a streaming request
-    try:
-        request_json = json.loads(body)
-        is_streaming = request_json.get("stream", False)
-    except JSONDecodeError:
-        # If we can't parse the body as JSON, assume it's not streaming
-        raise HTTPException(status=400, detail="Request body is not JSON parsable.")
 
     # sanitize the request headers
     headers = {
@@ -104,7 +96,7 @@ async def process_request(
     }
     # Add OPENAI_API_KEY if set
     if OPENAI_API_KEY := os.getenv("OPENAI_API_KEY"):
-        logger.info("Using OpenAI API key for backend authentication")
+        logger.debug("Using OpenAI API key for backend authentication")
         headers["Authorization"] = f"Bearer {OPENAI_API_KEY}"
 
     # For non-streaming requests, collect the full response to cache it properly
@@ -115,13 +107,34 @@ async def process_request(
     chat_id_found = False
     chat_cache = getattr(request.app.state, "chat_cache", None)
 
-    client = request.app.state.httpx_client_wrapper()
+    client_wrapper = request.app.state.httpx_client_wrapper
+    client = client_wrapper()
+    pool_size_before = client_wrapper.get_pool_size()
+    pre_backend_time = time.time()
     async with client.stream(
         method=request.method,
         url=backend_url + endpoint,
         headers=headers,
         content=body,
     ) as backend_response:
+        # This measures: connection acquisition + request send + backend TTFB
+        time_to_response_headers = time.time() - pre_backend_time
+        pool_size_after = client_wrapper.get_pool_size()
+        http_version = backend_response.http_version
+        # Detect if a new connection was created
+        new_connection = pool_size_after > pool_size_before
+        if new_connection:
+            logger.debug(
+                f"[{request_id}] NEW connection to {backend_url}: "
+                f"TTFB={time_to_response_headers*1000:.2f}ms "
+                f"({http_version}, pool: {pool_size_before}->{pool_size_after})"
+            )
+        else:
+            logger.debug(
+                f"[{request_id}] reused connection to {backend_url}: "
+                f"TTFB={time_to_response_headers*1000:.2f}ms "
+                f"({http_version}, pool: {pool_size_after})"
+            )
         # Yield headers and status code first.
         yield dict(backend_response.headers), backend_response.status_code
         # Stream response content.
@@ -172,9 +185,21 @@ async def process_request(
         except Exception:
             pass
 
+    end_time = time.time()
     request.app.state.request_stats_monitor.on_request_complete(
-        backend_url, request_id, time.time()
+        backend_url, request_id, end_time
     )
+
+    # Log timing breakdown
+    backend_time = end_time - pre_backend_time
+    total_time = end_time - start_time
+    router_overhead = total_time - backend_time
+    if total_time > 0:
+        logger.debug(
+            f"[{request_id}] timing: total={total_time*1000:.2f}ms, "
+            f"backend={backend_time*1000:.2f}ms, "
+            f"router_overhead={router_overhead*1000:.2f}ms ({router_overhead/total_time*100:.1f}%)"
+        )
 
     # if debug_request:
     #    logger.debug(f"Finished the request with request id: {debug_request.headers.get('x-request-id', None)} at {time.time()}")
@@ -335,6 +360,7 @@ async def route_general_request(
     logger.info(
         f"Routing request {request_id} with session id {session_id_display} to {server_url}"
     )
+    is_streaming = request_json.get("stream", False)
     stream_generator = process_request(
         request,
         request_body,
@@ -342,6 +368,7 @@ async def route_general_request(
         request_id,
         endpoint,
         background_tasks,
+        is_streaming=is_streaming,
     )
     headers, status = await anext(stream_generator)
     headers_dict = {key: value for key, value in headers.items()}

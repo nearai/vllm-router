@@ -11,11 +11,30 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import time
+from typing import Dict
+
 import httpx
 
 from vllm_router.log import init_logger
 
 logger = init_logger(__name__)
+
+
+# Track connection count per origin to detect new connections
+_connection_counts: Dict[str, int] = {}
+
+
+def _get_pool_size(transport) -> int:
+    """Get the current connection pool size from transport."""
+    try:
+        if hasattr(transport, "_pool") and transport._pool:
+            pool = transport._pool
+            if hasattr(pool, "connections"):
+                return len(pool.connections)
+    except Exception:
+        pass
+    return -1
 
 
 class HttpxClientWrapper:
@@ -31,18 +50,36 @@ class HttpxClientWrapper:
 
     def start(self):
         """Instantiate the client. Call from the FastAPI startup hook."""
-        self.async_client = httpx.AsyncClient(
+        # Create custom transport with connection logging
+        self._transport = httpx.AsyncHTTPTransport(
             http2=True,
-            timeout=httpx.Timeout(None),  # No timeout for streaming requests
             limits=httpx.Limits(
                 max_connections=200,
                 max_keepalive_connections=100,
+                keepalive_expiry=120,  # Keep connections alive for 2 minutes
             ),
+        )
+        self.async_client = httpx.AsyncClient(
+            transport=self._transport,
+            timeout=httpx.Timeout(None),  # No timeout for streaming requests
         )
         logger.info(
             f"httpx AsyncClient instantiated with HTTP/2 support. "
             f"Id {id(self.async_client)}"
         )
+
+    def get_pool_size(self) -> int:
+        """Get the current connection pool size."""
+        return _get_pool_size(self._transport)
+
+    def log_pool_status(self, context: str = ""):
+        """Log the current connection pool status."""
+        pool_size = self.get_pool_size()
+        if pool_size >= 0:
+            logger.debug(
+                f"Connection pool status{' (' + context + ')' if context else ''}: "
+                f"{pool_size} connections"
+            )
 
     async def stop(self):
         """Gracefully shutdown. Call from FastAPI shutdown hook."""

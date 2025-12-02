@@ -108,6 +108,8 @@ class EngineStatsScraper(metaclass=SingletonMeta):
             )
         self.engine_stats: Dict[str, EngineStats] = {}
         self.engine_stats_lock = threading.Lock()
+        # Cached immutable snapshot for lock-free reads
+        self._cached_stats: Dict[str, EngineStats] = {}
         self.scrape_interval = scrape_interval
 
         # scrape thread
@@ -157,6 +159,8 @@ class EngineStatsScraper(metaclass=SingletonMeta):
                     del self.engine_stats[old_url]
             for url, stats in collected_engine_stats.items():
                 self.engine_stats[url] = stats
+            # Update cached snapshot for lock-free reads
+            self._cached_stats = self.engine_stats.copy()
 
     def _sleep_or_break(self, check_interval: float = 1):
         """
@@ -183,13 +187,14 @@ class EngineStatsScraper(metaclass=SingletonMeta):
 
     def get_engine_stats(self) -> Dict[str, EngineStats]:
         """
-        Retrieve a copy of the current engine statistics.
+        Retrieve the current engine statistics.
+        This is a lock-free read that returns the cached snapshot.
 
         Returns:
             A dictionary mapping engine URLs to their respective EngineStats objects.
         """
-        with self.engine_stats_lock:
-            return self.engine_stats.copy()
+        # Lock-free read: return cached snapshot (updated by scraper thread)
+        return self._cached_stats
 
     def get_health(self) -> bool:
         """

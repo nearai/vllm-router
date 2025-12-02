@@ -461,12 +461,14 @@ class PrefixAwareRouter(RoutingInterface):
             prompt = request_json["prompt"]
 
         available_endpoints = set(endpoint.url for endpoint in endpoints)
-        _, matched_endpoint = await self.hashtrie.longest_prefix_match(
+        # longest_prefix_match is now lock-free (synchronous)
+        _, matched_endpoint = self.hashtrie.longest_prefix_match(
             prompt, available_endpoints
         )
 
         selected_endpoint = random.choice(list(matched_endpoint))
 
+        # insert still requires locks for thread-safety
         await self.hashtrie.insert(prompt, selected_endpoint)
 
         return selected_endpoint
