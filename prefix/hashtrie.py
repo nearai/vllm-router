@@ -92,7 +92,7 @@ class HashTrie:
                     break
                 # Copy endpoints while holding the lock to ensure consistency
                 endpoints = node.endpoints.copy()
-            
+
             node = next_node
             intersection = endpoints.intersection(selected_endpoints)
             # reached longest prefix match in currently-available endpoints.

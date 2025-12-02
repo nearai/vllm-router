@@ -602,6 +602,56 @@ class StaticServiceDiscovery(ServiceDiscovery):
         if hasattr(self, "loop") and not self.loop.is_closed():
             self.loop.close()
 
+    def mark_backend_unhealthy_during_request(self, url: str, model: str) -> bool:
+        """
+        Mark a backend as unhealthy during request processing.
+        This is called when a backend fails to respond to a request.
+        
+        Args:
+            url: The backend URL that failed
+            model: The model name that was being requested
+            
+        Returns:
+            bool: True if the backend should be removed from the pool, False otherwise
+        """
+        endpoint_hash = self.get_model_endpoint_hash(url, model)
+        
+        with self._lock:
+            # Increment failure count
+            self.backend_failure_counts[endpoint_hash] = self.backend_failure_counts.get(endpoint_hash, 0) + 1
+            failure_count = self.backend_failure_counts[endpoint_hash]
+            
+            logger.warning(
+                f"Backend {url} with model {model} failed during request processing. "
+                f"Failure count: {failure_count}/{self.health_check_removal_threshold}"
+            )
+            
+            # Check if we should remove this backend
+            if failure_count >= self.health_check_removal_threshold:
+                logger.error(
+                    f"Backend {url} with model {model} exceeded failure threshold "
+                    f"({failure_count} >= {self.health_check_removal_threshold}). "
+                    f"Removing from pool."
+                )
+                
+                # Add to unhealthy endpoints list
+                if endpoint_hash not in self.unhealthy_endpoint_hashes:
+                    self.unhealthy_endpoint_hashes.append(endpoint_hash)
+                
+                # Remove from failure counts since it's now permanently unhealthy
+                del self.backend_failure_counts[endpoint_hash]
+                
+                # Increment Prometheus counter for removed backends
+                try:
+                    from vllm_router.services.metrics_service import vllm_router_backends_removed_total
+                    vllm_router_backends_removed_total.inc()
+                except ImportError:
+                    pass  # Metrics service may not be available in all contexts
+                
+                return True
+            
+            return False
+
 
 def _create_service_discovery(
     service_discovery_type: ServiceDiscoveryType, *args, **kwargs

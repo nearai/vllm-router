@@ -1,6 +1,7 @@
 import abc
 import enum
 import io
+import os
 import json
 import re
 import resource
@@ -225,14 +226,16 @@ def update_content_length(request: Request, request_body: str):
 def is_model_healthy(url: str, model: str, model_type: str) -> bool:
     model_url = ModelType.get_url(model_type)
     full_url = f"{url}{model_url}"
-    
+
     logger.debug(f"Starting health check for {model_type} model {model} at {full_url}")
 
     try:
         if model_type == "transcription":
             # for transcription, the backend expects multipart/form-data with a file
             # we will use pre-generated silent wav bytes
-            logger.debug(f"Testing transcription model {model} with multipart/form-data request to {full_url}")
+            logger.debug(
+                f"Testing transcription model {model} with multipart/form-data request to {full_url}"
+            )
             response = requests.post(
                 f"{url}{model_url}",
                 files=ModelType.get_test_payload(model_type),  # multipart/form-data
@@ -242,7 +245,9 @@ def is_model_healthy(url: str, model: str, model_type: str) -> bool:
         else:
             # for other model types (chat, completion, etc.)
             test_payload = {"model": model} | ModelType.get_test_payload(model_type)
-            logger.debug(f"Testing {model_type} model {model} with JSON payload to {full_url}")
+            logger.debug(
+                f"Testing {model_type} model {model} with JSON payload to {full_url}"
+            )
             logger.debug(f"Request payload for {model}: {test_payload}")
             response = requests.post(
                 f"{url}{model_url}",
@@ -251,39 +256,59 @@ def is_model_healthy(url: str, model: str, model_type: str) -> bool:
                 timeout=10,
             )
 
-        logger.debug(f"Health check response for {model} at {full_url}: HTTP {response.status_code}")
+        logger.debug(
+            f"Health check response for {model} at {full_url}: HTTP {response.status_code}"
+        )
         logger.debug(f"Response headers for {model}: {dict(response.headers)}")
 
         response.raise_for_status()
 
         if model_type == "transcription":
-            logger.debug(f"Transcription model {model} health check passed (HTTP {response.status_code})")
+            logger.debug(
+                f"Transcription model {model} health check passed (HTTP {response.status_code})"
+            )
             return True
         else:
             logger.debug(f"Parsing JSON response for {model_type} model {model}")
-            response_json = response.json()  # verify it's valid json for other model types
+            response_json = (
+                response.json()
+            )  # verify it's valid json for other model types
             logger.debug(f"Response JSON for {model}: {response_json}")
-            logger.info(f"{model_type} model {model} at {url} is healthy (HTTP {response.status_code})")
+            logger.info(
+                f"{model_type} model {model} at {url} is healthy (HTTP {response.status_code})"
+            )
             return True  # validation passed
 
     except requests.exceptions.Timeout as e:
         logger.debug(f"{model_type} Model {model} at {url} health check TIMEOUT: {e}")
         return False
     except requests.exceptions.ConnectionError as e:
-        logger.debug(f"{model_type} Model {model} at {url} health check CONNECTION ERROR: {e}")
+        logger.debug(
+            f"{model_type} Model {model} at {url} health check CONNECTION ERROR: {e}"
+        )
         return False
     except requests.exceptions.HTTPError as e:
-        logger.debug(f"{model_type} Model {model} at {url} health check HTTP ERROR: {e}")
-        logger.debug(f"Response content for {model}: {e.response.text if e.response else 'No response'}")
+        logger.debug(
+            f"{model_type} Model {model} at {url} health check HTTP ERROR: {e}"
+        )
+        logger.debug(
+            f"Response content for {model}: {e.response.text if e.response else 'No response'}"
+        )
         return False
     except requests.exceptions.RequestException as e:
-        logger.debug(f"{model_type} Model {model} at {url} health check REQUEST ERROR: {e}")
+        logger.debug(
+            f"{model_type} Model {model} at {url} health check REQUEST ERROR: {e}"
+        )
         return False
     except json.JSONDecodeError as e:
-        logger.debug(f"{model_type} Model {model} at {url} health check JSON DECODE ERROR: {e}")
+        logger.debug(
+            f"{model_type} Model {model} at {url} health check JSON DECODE ERROR: {e}"
+        )
         return False
     except Exception as e:
-        logger.debug(f"{model_type} Model {model} at {url} health check UNEXPECTED ERROR: {type(e).__name__}: {e}")
+        logger.debug(
+            f"{model_type} Model {model} at {url} health check UNEXPECTED ERROR: {type(e).__name__}: {e}"
+        )
         return False
 
 
@@ -300,24 +325,28 @@ def fetch_models_list(url: str, timeout: int = 10) -> Optional[list[str]]:
     """
     models_url = f"{url}/v1/models"
     logger.debug(f"Fetching models list from {models_url} (timeout: {timeout}s)")
-    
+
     try:
         logger.debug(f"Sending GET request to {models_url}")
         response = requests.get(models_url, timeout=timeout)
-        logger.debug(f"Models endpoint response from {url}: HTTP {response.status_code}")
-        
+        logger.debug(
+            f"Models endpoint response from {url}: HTTP {response.status_code}"
+        )
+
         response.raise_for_status()
-        
+
         logger.debug(f"Parsing JSON response from {models_url}")
         data = response.json()
         models_data = data.get("data", [])
         model_ids = [model.get("id") for model in models_data if model.get("id")]
-        
+
         logger.debug(f"Raw models data from {url}: {models_data}")
-        logger.info(f"Successfully fetched {len(model_ids)} models from {url}: {model_ids}")
-        
+        logger.info(
+            f"Successfully fetched {len(model_ids)} models from {url}: {model_ids}"
+        )
+
         return model_ids
-        
+
     except requests.exceptions.Timeout as e:
         logger.debug(f"Timeout fetching models from {url}: {e}")
         return None
@@ -326,7 +355,9 @@ def fetch_models_list(url: str, timeout: int = 10) -> Optional[list[str]]:
         return None
     except requests.exceptions.HTTPError as e:
         logger.debug(f"HTTP error fetching models from {url}: {e}")
-        logger.debug(f"Response content from {url}: {e.response.text if e.response else 'No response'}")
+        logger.debug(
+            f"Response content from {url}: {e.response.text if e.response else 'No response'}"
+        )
         return None
     except requests.exceptions.RequestException as e:
         logger.debug(f"Request error fetching models from {url}: {e}")
@@ -335,7 +366,9 @@ def fetch_models_list(url: str, timeout: int = 10) -> Optional[list[str]]:
         logger.debug(f"JSON decode error fetching models from {url}: {e}")
         return None
     except Exception as e:
-        logger.debug(f"Unexpected error fetching models from {url}: {type(e).__name__}: {e}")
+        logger.debug(
+            f"Unexpected error fetching models from {url}: {type(e).__name__}: {e}"
+        )
         return None
 
 
@@ -351,23 +384,32 @@ def check_attestation_available(url: str, timeout: int = 10) -> bool:
         True if the endpoint responds successfully, False otherwise
     """
     attestation_url = f"{url}/v1/attestation/report"
-    logger.debug(f"Checking attestation endpoint availability at {attestation_url} (timeout: {timeout}s)")
-    
+    logger.debug(
+        f"Checking attestation endpoint availability at {attestation_url} (timeout: {timeout}s)"
+    )
+
     try:
         logger.debug(f"Sending GET request to attestation endpoint {attestation_url}")
-        response = requests.get(attestation_url, timeout=timeout)
-        logger.debug(f"Attestation endpoint response from {url}: HTTP {response.status_code}")
-        
+        headers = {"Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}"}
+        response = requests.get(attestation_url, headers=headers, timeout=timeout)
+        logger.debug(
+            f"Attestation endpoint response from {url}: HTTP {response.status_code}"
+        )
+
         response.raise_for_status()
-        
+
         # Verify it returns valid JSON
-        logger.debug(f"Parsing JSON response from attestation endpoint {attestation_url}")
+        logger.debug(
+            f"Parsing JSON response from attestation endpoint {attestation_url}"
+        )
         response_json = response.json()
-        logger.debug(f"Attestation response JSON from {url}: {response_json}")
-        logger.info(f"Attestation endpoint available at {url} (HTTP {response.status_code})")
-        
+        logger.debug(f"Attestation response has valid JSON")
+        logger.info(
+            f"Attestation endpoint available at {url} (HTTP {response.status_code})"
+        )
+
         return True
-        
+
     except requests.exceptions.Timeout as e:
         logger.debug(f"Timeout checking attestation endpoint at {url}: {e}")
         return False
@@ -376,7 +418,9 @@ def check_attestation_available(url: str, timeout: int = 10) -> bool:
         return False
     except requests.exceptions.HTTPError as e:
         logger.debug(f"HTTP error checking attestation endpoint at {url}: {e}")
-        logger.debug(f"Attestation response content from {url}: {e.response.text if e.response else 'No response'}")
+        logger.debug(
+            f"Attestation response content from {url}: {e.response.text if e.response else 'No response'}"
+        )
         return False
     except requests.exceptions.RequestException as e:
         logger.debug(f"Request error checking attestation endpoint at {url}: {e}")
@@ -385,5 +429,7 @@ def check_attestation_available(url: str, timeout: int = 10) -> bool:
         logger.debug(f"JSON decode error checking attestation endpoint at {url}: {e}")
         return False
     except Exception as e:
-        logger.debug(f"Unexpected error checking attestation endpoint at {url}: {type(e).__name__}: {e}")
+        logger.debug(
+            f"Unexpected error checking attestation endpoint at {url}: {type(e).__name__}: {e}"
+        )
         return False

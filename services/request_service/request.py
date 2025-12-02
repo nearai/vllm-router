@@ -117,72 +117,138 @@ async def process_request(
     # - In highly concurrent scenarios, false positives/negatives are still possible
     conn_ids_before = client_wrapper.get_connection_ids()
     pre_backend_time = time.time()
-    async with client.stream(
-        method=request.method,
-        url=backend_url + endpoint,
-        headers=headers,
-        content=body,
-    ) as backend_response:
-        # This measures: connection acquisition + request send + backend TTFB
-        time_to_response_headers = time.time() - pre_backend_time
-        conn_ids_after = client_wrapper.get_connection_ids()
-        http_version = backend_response.http_version
-        # Detect if a new connection was created by checking for new connection IDs
-        # This is more reliable than pool size checking but still best-effort in concurrent environments
-        new_connections = conn_ids_after - conn_ids_before
-        new_connection = len(new_connections) > 0
-        if new_connection:
-            logger.debug(
-                f"[{request_id}] NEW connection to {backend_url}: "
-                f"TTFB={time_to_response_headers*1000:.2f}ms "
-                f"({http_version}, new_conns={len(new_connections)}, total_pool={len(conn_ids_after)})"
+
+    try:
+        async with client.stream(
+            method=request.method,
+            url=backend_url + endpoint,
+            headers=headers,
+            content=body,
+        ) as backend_response:
+            # This measures: connection acquisition + request send + backend TTFB
+            time_to_response_headers = time.time() - pre_backend_time
+            conn_ids_after = client_wrapper.get_connection_ids()
+            http_version = backend_response.http_version
+            # Detect if a new connection was created by checking for new connection IDs
+            # This is more reliable than pool size checking but still best-effort in concurrent environments
+            new_connections = conn_ids_after - conn_ids_before
+            new_connection = len(new_connections) > 0
+            if new_connection:
+                logger.debug(
+                    f"[{request_id}] NEW connection to {backend_url}: "
+                    f"TTFB={time_to_response_headers*1000:.2f}ms "
+                    f"({http_version}, new_conns={len(new_connections)}, total_pool={len(conn_ids_after)})"
+                )
+            else:
+                logger.debug(
+                    f"[{request_id}] reused connection to {backend_url}: "
+                    f"TTFB={time_to_response_headers*1000:.2f}ms "
+                    f"({http_version}, pool_size={len(conn_ids_after)})"
+                )
+            # Yield headers and status code first.
+            yield dict(backend_response.headers), backend_response.status_code
+            # Stream response content.
+            async for chunk in backend_response.aiter_bytes():
+                total_len += len(chunk)
+                if not first_token:
+                    first_token = True
+                    request.app.state.request_stats_monitor.on_request_response(
+                        backend_url, request_id, time.time()
+                    )
+
+                # Extract chat_id for streaming response
+                if is_streaming and not chat_id_found and chat_cache is not None:
+                    try:
+                        text_chunk = chunk.decode("utf-8", errors="ignore")
+                        stream_buffer += text_chunk
+                        # Look for data: {...}
+                        while "\n" in stream_buffer:
+                            line, stream_buffer = stream_buffer.split("\n", 1)
+                            line = line.strip()
+                            if line.startswith("data: ") and line != "data: [DONE]":
+                                try:
+                                    data_str = line[6:].strip()
+                                    data_json = json.loads(data_str)
+                                    if "id" in data_json:
+                                        chat_id_val = data_json["id"]
+                                        chat_cache[chat_id_val] = backend_url
+                                        chat_id_found = True
+                                        break
+                                except Exception:
+                                    pass
+                        if len(stream_buffer) > 4096:  # Stop buffering if too large
+                            chat_id_found = True
+                    except Exception:
+                        pass
+
+                # For non-streaming requests, collect the full response
+                if full_response is not None:
+                    full_response.extend(chunk)
+                yield chunk
+
+    except httpx.RequestError as e:
+        # Connection error, timeout, or other request-level error
+        logger.error(f"Request failed to backend {backend_url}: {str(e)}")
+
+        # Mark backend as unhealthy
+        service_discovery = get_service_discovery()
+        if hasattr(service_discovery, "mark_backend_unhealthy_during_request"):
+            # Extract model name from the request if possible
+            model_name = "unknown"
+            try:
+                if body:
+                    request_json = json.loads(body)
+                    model_name = request_json.get("model", "unknown")
+            except:
+                pass
+
+            should_remove = service_discovery.mark_backend_unhealthy_during_request(
+                backend_url, model_name
             )
-        else:
-            logger.debug(
-                f"[{request_id}] reused connection to {backend_url}: "
-                f"TTFB={time_to_response_headers*1000:.2f}ms "
-                f"({http_version}, pool_size={len(conn_ids_after)})"
-            )
-        # Yield headers and status code first.
-        yield dict(backend_response.headers), backend_response.status_code
-        # Stream response content.
-        async for chunk in backend_response.aiter_bytes():
-            total_len += len(chunk)
-            if not first_token:
-                first_token = True
-                request.app.state.request_stats_monitor.on_request_response(
-                    backend_url, request_id, time.time()
+            if should_remove:
+                logger.warning(
+                    f"Backend {backend_url} removed from pool due to repeated failures"
                 )
 
-            # Extract chat_id for streaming response
-            if is_streaming and not chat_id_found and chat_cache is not None:
+        # Re-raise the error with backend information
+        raise Exception(f"Backend {backend_url} failed: {str(e)}")
+
+    except httpx.HTTPStatusError as e:
+        # HTTP error response (4xx, 5xx)
+        logger.error(
+            f"HTTP error from backend {backend_url}: {e.response.status_code} {e.response.reason_phrase}"
+        )
+
+        # For 5xx errors, mark backend as unhealthy
+        if e.response.status_code >= 500:
+            service_discovery = get_service_discovery()
+            if hasattr(service_discovery, "mark_backend_unhealthy_during_request"):
+                # Extract model name from the request if possible
+                model_name = "unknown"
                 try:
-                    text_chunk = chunk.decode("utf-8", errors="ignore")
-                    stream_buffer += text_chunk
-                    # Look for data: {...}
-                    while "\n" in stream_buffer:
-                        line, stream_buffer = stream_buffer.split("\n", 1)
-                        line = line.strip()
-                        if line.startswith("data: ") and line != "data: [DONE]":
-                            try:
-                                data_str = line[6:].strip()
-                                data_json = json.loads(data_str)
-                                if "id" in data_json:
-                                    chat_id_val = data_json["id"]
-                                    chat_cache[chat_id_val] = backend_url
-                                    chat_id_found = True
-                                    break
-                            except Exception:
-                                pass
-                    if len(stream_buffer) > 4096:  # Stop buffering if too large
-                        chat_id_found = True
-                except Exception:
+                    if body:
+                        request_json = json.loads(body)
+                        model_name = request_json.get("model", "unknown")
+                except:
                     pass
 
-            # For non-streaming requests, collect the full response
-            if full_response is not None:
-                full_response.extend(chunk)
-            yield chunk
+                should_remove = service_discovery.mark_backend_unhealthy_during_request(
+                    backend_url, model_name
+                )
+                if should_remove:
+                    logger.warning(
+                        f"Backend {backend_url} removed from pool due to HTTP {e.response.status_code} errors"
+                    )
+
+        # Re-raise the error with backend information
+        raise Exception(
+            f"Backend {backend_url} returned HTTP {e.response.status_code}: {e.response.reason_phrase}"
+        )
+
+    except Exception as e:
+        # Unexpected error
+        logger.error(f"Unexpected error with backend {backend_url}: {str(e)}")
+        raise
 
     # Extract chat_id for non-streaming response
     if not is_streaming and chat_cache is not None and full_response:
@@ -343,50 +409,117 @@ async def route_general_request(
             )
 
     logger.debug(f"Routing request {request_id} for model: {requested_model}")
-    if request_endpoint:
-        server_url = endpoints[0].url
-        logger.debug(
-            f"Routing request {request_id} to engine with Id: {endpoints[0].Id}"
-        )
-
-    elif isinstance(
-        request.app.state.router, (KvawareRouter, PrefixAwareRouter, SessionRouter)
-    ):
-        server_url = await request.app.state.router.route_request(
-            endpoints, engine_stats, request_stats, request, request_json
-        )
-    else:
-        server_url = request.app.state.router.route_request(
-            endpoints, engine_stats, request_stats, request
-        )
 
     # Extract actual session ID from request headers for logging
     session_id = request.app.state.router.extract_session_id(request, request_json)
     session_id_display = session_id if session_id is not None else "None"
 
     logger.debug(f"Routing request {request_id} for model: {requested_model}")
-    logger.info(
-        f"Routing request {request_id} with session id {session_id_display} to {server_url}"
+
+    # Implement retry logic for backend failures
+    max_retries = len(endpoints)  # Maximum retries equals number of available backends
+    last_error = None
+
+    for attempt in range(max_retries):
+        if attempt > 0:
+            logger.info(
+                f"Retry attempt {attempt + 1}/{max_retries} for request {request_id}"
+            )
+
+        # Select backend using routing logic (on retry, we may have fewer endpoints)
+        if request_endpoint:
+            server_url = endpoints[0].url
+            logger.debug(
+                f"Routing request {request_id} to engine with Id: {endpoints[0].Id}"
+            )
+        elif isinstance(
+            request.app.state.router, (KvawareRouter, PrefixAwareRouter, SessionRouter)
+        ):
+            server_url = await request.app.state.router.route_request(
+                endpoints, engine_stats, request_stats, request, request_json
+            )
+        else:
+            server_url = request.app.state.router.route_request(
+                endpoints, engine_stats, request_stats, request
+            )
+
+        logger.info(
+            f"Routing request {request_id} with session id {session_id_display} to {server_url}"
+        )
+
+        try:
+            is_streaming = request_json.get("stream", False)
+            stream_generator = process_request(
+                request,
+                request_body,
+                server_url,
+                request_id,
+                endpoint,
+                background_tasks,
+                is_streaming=is_streaming,
+            )
+            headers, status = await anext(stream_generator)
+            headers_dict = {key: value for key, value in headers.items()}
+            headers_dict["X-Request-Id"] = request_id
+
+            # Success! Return the streaming response
+            return StreamingResponse(
+                stream_generator,
+                status_code=status,
+                headers=headers_dict,
+                media_type="text/event-stream",
+            )
+
+        except Exception as e:
+            last_error = e
+            error_msg = str(e)
+
+            # Check if this is a backend failure that we should retry
+            if "Backend" in error_msg and (
+                "failed" in error_msg or "HTTP" in error_msg
+            ):
+                logger.warning(
+                    f"Backend {server_url} failed for request {request_id}: {error_msg}"
+                )
+
+                # Remove the failed backend from the endpoints list for this retry cycle
+                endpoints = [ep for ep in endpoints if ep.url != server_url]
+
+                if not endpoints:
+                    logger.error(f"No more backends available for request {request_id}")
+                    break
+
+                logger.info(
+                    f"Retrying request {request_id} with {len(endpoints)} remaining backends"
+                )
+            else:
+                # Not a backend failure, don't retry
+                logger.error(
+                    f"Non-recoverable error for request {request_id}: {error_msg}"
+                )
+                break
+
+    # If we get here, all retries failed
+    logger.error(
+        f"All retries failed for request {request_id}. Last error: {last_error}"
     )
-    is_streaming = request_json.get("stream", False)
-    stream_generator = process_request(
-        request,
-        request_body,
-        server_url,
-        request_id,
-        endpoint,
-        background_tasks,
-        is_streaming=is_streaming,
-    )
-    headers, status = await anext(stream_generator)
-    headers_dict = {key: value for key, value in headers.items()}
-    headers_dict["X-Request-Id"] = request_id
-    return StreamingResponse(
-        stream_generator,
-        status_code=status,
-        headers=headers_dict,
-        media_type="text/event-stream",
-    )
+
+    if last_error and "Backend" in str(last_error):
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": f"All backends failed for model '{requested_model}'. Last error: {str(last_error)}"
+            },
+            headers={"X-Request-Id": request_id},
+        )
+    else:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": f"Request failed for model '{requested_model}': {str(last_error)}"
+            },
+            headers={"X-Request-Id": request_id},
+        )
 
 
 async def send_request_to_prefiller(
@@ -417,7 +550,9 @@ async def send_request_to_decode(
         "X-Request-Id": request_id,
     }
 
-    async with client.stream("POST", endpoint, json=req_data, headers=headers) as response:
+    async with client.stream(
+        "POST", endpoint, json=req_data, headers=headers
+    ) as response:
         response.raise_for_status()
         async for chunk in response.aiter_bytes():
             yield chunk

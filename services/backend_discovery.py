@@ -9,6 +9,7 @@ import aiohttp
 
 from vllm_router.log import init_logger
 from vllm_router.service_discovery import get_service_discovery
+from vllm_router import utils
 
 logger = init_logger(__name__)
 
@@ -112,14 +113,15 @@ class BackendDiscoveryService:
 
     async def test_backend_health(self, peer_dns: str, port: int) -> Optional[str]:
         """
-        Test if a backend is healthy by checking the /v1/models endpoint.
+        Test if a backend is healthy by checking the /v1/models endpoint
+        and verifying attestation is available.
 
         Args:
             peer_dns: DNS name of the peer
             port: Port to test
 
         Returns:
-            Backend URL if healthy, None otherwise
+            Backend URL if healthy and attestation is available, None otherwise
         """
         backend_url = f"http://{peer_dns}:{port}"
         models_url = f"{backend_url}/v1/models"
@@ -145,8 +147,17 @@ class BackendDiscoveryService:
 
                     if response.status == 200:
                         logger.debug(f"Backend health check SUCCESS: {backend_url} (HTTP {response.status})")
-                        logger.info(f"Discovered healthy backend: {backend_url}")
-                        return backend_url
+                        
+                        # Check attestation endpoint availability
+                        logger.debug(f"Checking attestation endpoint for {backend_url}")
+                        attestation_available = utils.check_attestation_available(backend_url, self.timeout)
+                        
+                        if attestation_available:
+                            logger.info(f"Discovered healthy backend with attestation: {backend_url}")
+                            return backend_url
+                        else:
+                            logger.warning(f"Backend {backend_url} is healthy but attestation is not available. Skipping.")
+                            return None
                     else:
                         logger.debug(f"Backend health check FAILED: {backend_url} (HTTP {response.status})")
                         logger.debug(f"Response headers for {backend_url}: {dict(response.headers)}")
