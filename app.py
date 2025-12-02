@@ -29,6 +29,12 @@ from vllm_router.dynamic_config import (
     get_dynamic_config_watcher,
     initialize_dynamic_config_watcher,
 )
+from vllm_router.graceful_shutdown import (
+    get_shutdown_manager,
+    initialize_shutdown_manager,
+    setup_signal_handlers,
+)
+from vllm_router.middleware import GracefulShutdownMiddleware
 from vllm_router.parsers.parser import parse_args
 from vllm_router.routers.batches_router import batches_router
 from vllm_router.routers.config_router import config_router
@@ -89,8 +95,20 @@ async def lifespan(app: FastAPI):
         await service_discovery.initialize_client_sessions()
 
     app.state.event_loop = asyncio.get_event_loop()
+    
+    # Setup signal handlers for graceful shutdown
+    setup_signal_handlers(app.state.event_loop)
 
     yield
+    
+    # Wait for in-flight requests to complete during graceful shutdown
+    shutdown_manager = get_shutdown_manager()
+    if shutdown_manager is not None and shutdown_manager.is_shutting_down:
+        logger.info(
+            f"Waiting for {shutdown_manager.in_flight_requests} in-flight requests to complete..."
+        )
+        await shutdown_manager.wait_for_requests()
+    
     await app.state.httpx_client_wrapper.stop()
     await app.state.aiohttp_client_wrapper.stop()
 
@@ -260,6 +278,10 @@ def initialize_all(app: FastAPI, args):
 
 
 app = FastAPI(lifespan=lifespan)
+
+# Add graceful shutdown middleware (must be added before routers)
+app.add_middleware(GracefulShutdownMiddleware)
+
 app.include_router(health_router)
 app.include_router(main_router, dependencies=[Depends(verify_user_access)])
 app.include_router(proxy_router, dependencies=[Depends(verify_user_access)])
@@ -273,6 +295,11 @@ app.state.httpx_client_wrapper = HttpxClientWrapper()
 
 def main():
     args = parse_args()
+    
+    # Initialize graceful shutdown manager
+    initialize_shutdown_manager(timeout=args.graceful_shutdown_timeout)
+    logger.info(f"Graceful shutdown enabled with timeout: {args.graceful_shutdown_timeout}s")
+    
     initialize_all(app, args)
     if args.log_stats:
         threading.Thread(

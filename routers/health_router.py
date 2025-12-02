@@ -3,6 +3,7 @@ from fastapi import APIRouter, Response
 from fastapi.responses import JSONResponse
 
 from vllm_router.dynamic_config import get_dynamic_config_watcher
+from vllm_router.graceful_shutdown import get_shutdown_manager
 from vllm_router.service_discovery import get_service_discovery
 from vllm_router.stats.engine_stats import get_engine_stats_scraper
 from vllm_router.version import __version__
@@ -28,12 +29,26 @@ async def health() -> Response:
     the engine stats scraper. If either component is down, it returns a
     503 response with the appropriate status message. If both components
     are healthy, it returns a 200 OK response.
+    
+    During graceful shutdown, returns 503 to signal load balancers to stop
+    sending traffic to this instance.
 
     Returns:
         Response: A JSONResponse with status code 503 if a component is
-        down, or a plain Response with status code 200 if all components
-        are healthy.
+        down or the server is shutting down, or a plain Response with 
+        status code 200 if all components are healthy.
     """
+    # Check if server is shutting down
+    shutdown_manager = get_shutdown_manager()
+    if shutdown_manager is not None and shutdown_manager.is_shutting_down:
+        return JSONResponse(
+            content={
+                "status": "shutting_down",
+                "in_flight_requests": shutdown_manager.in_flight_requests,
+            },
+            status_code=503,
+            headers={"Connection": "close"},
+        )
 
     if not get_service_discovery().get_health():
         return JSONResponse(

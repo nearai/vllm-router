@@ -110,6 +110,8 @@ def validate_args(args):
         raise ValueError(
             "Sentry profile session sample rate must be between 0.0 and 1.0."
         )
+    if args.graceful_shutdown_timeout <= 0:
+        raise ValueError("Graceful shutdown timeout must be greater than 0.")
 
 
 def parse_args():
@@ -399,6 +401,14 @@ def parse_args():
         type=int,
         default=2,
         help="Timeout in seconds for backend health check requests",
+    )
+
+    # Graceful shutdown
+    parser.add_argument(
+        "--graceful-shutdown-timeout",
+        type=float,
+        default=30.0,
+        help="Maximum time in seconds to wait for in-flight requests to complete during shutdown (default: 30.0)",
     )
 
     args = parser.parse_args()
