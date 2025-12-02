@@ -52,6 +52,7 @@ _HOP_BY_HOP_HEADERS = {
     "upgrade",
     "te",  # codespell:ignore
     "trailer",
+    "authorization",
 }
 
 
