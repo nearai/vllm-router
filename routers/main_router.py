@@ -100,6 +100,9 @@ async def route_is_sleeping(request: Request, background_tasks: BackgroundTasks)
 async def show_models():
     """
     Returns a list of all models available in the stack.
+    
+    Note: This includes models on temporarily circuit-broken backends since the models
+    still exist, they're just temporarily unavailable for requests.
 
     Args:
         None
@@ -110,7 +113,12 @@ async def show_models():
     Raises:
         Exception: If there is an error in retrieving the endpoint information.
     """
-    endpoints = get_service_discovery().get_endpoint_info()
+    service_discovery = get_service_discovery()
+    # Include circuit-broken backends since models still exist
+    if hasattr(service_discovery, "get_endpoint_info"):
+        endpoints = service_discovery.get_endpoint_info(include_circuit_broken=True)
+    else:
+        endpoints = service_discovery.get_endpoint_info()
     existing_models = set()
     model_cards = []
 
@@ -139,18 +147,26 @@ async def show_models():
 @main_router.get("/engines")
 async def get_engine_instances():
     """
-    Returns a list of all models available in the stack.
+    Returns a list of all engine instances available in the stack.
+    
+    Note: This includes engines that are temporarily circuit-broken since they
+    still exist, they're just temporarily unavailable for requests.
 
     Args:
         None
 
     Returns:
-        JSONResponse: A JSON response containing the list of models and their relationships.
+        JSONResponse: A JSON response containing the list of engines.
 
     Raises:
         Exception: If there is an error in retrieving the endpoint information.
     """
-    endpoints = get_service_discovery().get_endpoint_info()
+    service_discovery = get_service_discovery()
+    # Include circuit-broken backends since engines still exist
+    if hasattr(service_discovery, "get_endpoint_info"):
+        endpoints = service_discovery.get_endpoint_info(include_circuit_broken=True)
+    else:
+        endpoints = service_discovery.get_endpoint_info()
     existing_engines = set()
     engines_cards = []
 

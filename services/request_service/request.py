@@ -264,6 +264,18 @@ async def process_request(
         backend_url, request_id, end_time
     )
 
+    # Record success for circuit breaker recovery
+    service_discovery = get_service_discovery()
+    if hasattr(service_discovery, "record_request_success"):
+        model_name = "unknown"
+        try:
+            if body:
+                request_json_parsed = json.loads(body)
+                model_name = request_json_parsed.get("model", "unknown")
+        except Exception:
+            pass
+        service_discovery.record_request_success(backend_url, model_name)
+
     # Log timing breakdown
     backend_time = end_time - pre_backend_time
     total_time = end_time - start_time
@@ -416,8 +428,12 @@ async def route_general_request(
 
     logger.debug(f"Routing request {request_id} for model: {requested_model}")
 
+    # Track URLs we've already tried to avoid retrying the same backend
+    tried_urls = set()
+
     # Implement retry logic for backend failures
-    max_retries = len(endpoints)  # Maximum retries equals number of available backends
+    # Use a reasonable max retry count (not just len(endpoints) since endpoints can change)
+    max_retries = 5
     last_error = None
 
     for attempt in range(max_retries):
@@ -425,8 +441,35 @@ async def route_general_request(
             logger.info(
                 f"Retry attempt {attempt + 1}/{max_retries} for request {request_id}"
             )
+            # On retry, get fresh endpoint list (respects circuit breaker state)
+            endpoints = service_discovery.get_endpoint_info()
+            endpoints = list(
+                filter(
+                    lambda x: requested_model in x.model_names and not x.sleep,
+                    endpoints,
+                )
+            )
+            # Filter out already-tried endpoints
+            endpoints = [ep for ep in endpoints if ep.url not in tried_urls]
 
-        # Select backend using routing logic (on retry, we may have fewer endpoints)
+            if not endpoints:
+                logger.error(
+                    f"No more backends available for request {request_id} "
+                    f"(tried: {len(tried_urls)}, all circuit-broken or failed)"
+                )
+                break
+
+            # Refresh stats
+            engine_stats = request.app.state.engine_stats_scraper.get_engine_stats()
+            request_stats = request.app.state.request_stats_monitor.get_request_stats(
+                time.time()
+            )
+
+        if not endpoints:
+            logger.error(f"No backends available for request {request_id}")
+            break
+
+        # Select backend using routing logic
         if request_endpoint:
             server_url = endpoints[0].url
             logger.debug(
@@ -443,6 +486,7 @@ async def route_general_request(
                 endpoints, engine_stats, request_stats, request
             )
 
+        tried_urls.add(server_url)
         logger.info(
             f"Routing request {request_id} with session id {session_id_display} to {server_url}"
         )
@@ -481,16 +525,9 @@ async def route_general_request(
                 logger.warning(
                     f"Backend {server_url} failed for request {request_id}: {error_msg}"
                 )
-
-                # Remove the failed backend from the endpoints list for this retry cycle
-                endpoints = [ep for ep in endpoints if ep.url != server_url]
-
-                if not endpoints:
-                    logger.error(f"No more backends available for request {request_id}")
-                    break
-
+                # Continue to next iteration - circuit breaker already updated
                 logger.info(
-                    f"Retrying request {request_id} with {len(endpoints)} remaining backends"
+                    f"Will retry request {request_id}, tried backends: {tried_urls}"
                 )
             else:
                 # Not a backend failure, don't retry

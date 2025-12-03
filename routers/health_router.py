@@ -80,6 +80,9 @@ async def backends() -> Response:
     Returns detailed information about each backend including:
     - URL and model name
     - Health status (healthy/unhealthy)
+    - Circuit breaker state (closed/open/half_open)
+    - Whether currently accepting requests
+    - Cooldown remaining (if circuit is open)
     - Consecutive failure count
     - Failure threshold before removal
     - Model label and type
@@ -93,15 +96,32 @@ async def backends() -> Response:
     # Check if the service discovery has the method (only StaticServiceDiscovery has it)
     if hasattr(service_discovery, "get_backend_health_status"):
         backend_status = service_discovery.get_backend_health_status()
+
+        # Calculate summary statistics
+        total = len(backend_status)
+        healthy = sum(1 for b in backend_status if b.get("healthy", False))
+        unhealthy = sum(1 for b in backend_status if not b.get("healthy", False))
+        accepting = sum(1 for b in backend_status if b.get("accepting_requests", False))
+        circuit_open = sum(
+            1 for b in backend_status if b.get("circuit_state") == "open"
+        )
+        circuit_half_open = sum(
+            1 for b in backend_status if b.get("circuit_state") == "half_open"
+        )
+
         logger.info(
-            f"returning {len(backend_status)} backends, {sum(1 for b in backend_status if b['healthy'])} healthy, {sum(1 for b in backend_status if not b['healthy'])} unhealthy"
+            f"returning {total} backends: {accepting} accepting, "
+            f"{circuit_open} circuit-open, {circuit_half_open} half-open, "
+            f"{unhealthy} permanently unhealthy"
         )
         return JSONResponse(
             content={
                 "backends": backend_status,
-                "total": len(backend_status),
-                "healthy": sum(1 for b in backend_status if b["healthy"]),
-                "unhealthy": sum(1 for b in backend_status if not b["healthy"]),
+                "total": total,
+                "accepting_requests": accepting,
+                "circuit_open": circuit_open,
+                "circuit_half_open": circuit_half_open,
+                "permanently_unhealthy": unhealthy,
             },
             status_code=200,
         )

@@ -143,9 +143,17 @@ class EngineStatsScraper(metaclass=SingletonMeta):
         _scrape_one_endpoint on each of them. The metrics are
         stored in self.engine_stats.
 
+        Note: We include circuit-broken backends in scraping because:
+        1. Metrics scraping doesn't affect users
+        2. Successful scrapes can help detect recovery
         """
         collected_engine_stats = {}
-        endpoints = get_service_discovery().get_endpoint_info()
+        service_discovery = get_service_discovery()
+        # Include circuit-broken backends for metrics collection
+        if hasattr(service_discovery, "get_endpoint_info"):
+            endpoints = service_discovery.get_endpoint_info(include_circuit_broken=True)
+        else:
+            endpoints = service_discovery.get_endpoint_info()
         logger.info(f"Scraping metrics from {len(endpoints)} serving engine(s)")
         for info in endpoints:
             url = info.url

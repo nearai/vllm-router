@@ -18,7 +18,7 @@ import hashlib
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
 import aiohttp
@@ -27,6 +27,94 @@ from vllm_router import utils
 from vllm_router.log import init_logger
 
 logger = init_logger(__name__)
+
+
+class CircuitState(enum.Enum):
+    """Circuit breaker states."""
+
+    CLOSED = "closed"  # Normal operation, requests allowed
+    OPEN = "open"  # Failing, requests blocked
+    HALF_OPEN = "half_open"  # Testing if backend recovered
+
+
+@dataclass
+class CircuitBreaker:
+    """Circuit breaker for a single backend endpoint."""
+
+    state: CircuitState = CircuitState.CLOSED
+    failure_count: int = 0
+    last_failure_time: float = 0.0
+    last_success_time: float = 0.0
+    consecutive_successes: int = 0
+    cooldown_seconds: float = 5.0  # Initial cooldown when circuit opens
+    max_cooldown_seconds: float = 60.0  # Maximum cooldown with backoff
+    current_cooldown: float = 5.0  # Current cooldown (increases with backoff)
+
+    def record_failure(self) -> None:
+        """Record a failure and potentially open the circuit."""
+        self.failure_count += 1
+        self.last_failure_time = time.time()
+        self.consecutive_successes = 0
+
+        if self.state == CircuitState.CLOSED:
+            # Open circuit on first failure for immediate protection
+            self.state = CircuitState.OPEN
+            self.current_cooldown = self.cooldown_seconds
+            logger.warning(
+                f"Circuit OPENED after failure (cooldown: {self.current_cooldown}s)"
+            )
+        elif self.state == CircuitState.HALF_OPEN:
+            # Failed during test, reopen with increased cooldown
+            self.state = CircuitState.OPEN
+            self.current_cooldown = min(
+                self.current_cooldown * 2, self.max_cooldown_seconds
+            )
+            logger.warning(
+                f"Circuit reopened from half-open, backoff cooldown: {self.current_cooldown}s"
+            )
+
+    def record_success(self) -> None:
+        """Record a success and potentially close the circuit."""
+        self.last_success_time = time.time()
+        self.consecutive_successes += 1
+
+        if self.state == CircuitState.HALF_OPEN:
+            # Success during test, close the circuit
+            self.state = CircuitState.CLOSED
+            self.failure_count = 0
+            self.current_cooldown = self.cooldown_seconds  # Reset cooldown
+            logger.info("Circuit CLOSED after successful test")
+        elif self.state == CircuitState.CLOSED:
+            # Ongoing success, reset failure count periodically
+            if self.consecutive_successes >= 3:
+                self.failure_count = max(0, self.failure_count - 1)
+
+    def should_allow_request(self) -> bool:
+        """Check if a request should be allowed through this circuit."""
+        if self.state == CircuitState.CLOSED:
+            return True
+
+        if self.state == CircuitState.OPEN:
+            # Check if cooldown period has elapsed
+            elapsed = time.time() - self.last_failure_time
+            if elapsed >= self.current_cooldown:
+                self.state = CircuitState.HALF_OPEN
+                logger.info(
+                    f"Circuit transitioning to HALF_OPEN after {elapsed:.1f}s cooldown"
+                )
+                return True
+            return False
+
+        if self.state == CircuitState.HALF_OPEN:
+            # Allow limited requests to test the backend
+            return True
+
+        return False
+
+    def is_healthy(self) -> bool:
+        """Check if circuit considers the backend healthy."""
+        return self.state == CircuitState.CLOSED
+
 
 _global_service_discovery: "Optional[ServiceDiscovery]" = None
 
@@ -173,10 +261,16 @@ class EndpointInfo:
 
 class ServiceDiscovery(metaclass=abc.ABCMeta):
     @abc.abstractmethod
-    def get_endpoint_info(self) -> List[EndpointInfo]:
+    def get_endpoint_info(
+        self, include_circuit_broken: bool = False
+    ) -> List[EndpointInfo]:
         """
         Get the URLs of the serving engines that are available for
         querying.
+
+        Args:
+            include_circuit_broken: If True, include endpoints with open circuits.
+                                   Default False excludes them for normal routing.
 
         Returns:
             a list of engine URLs
@@ -215,6 +309,8 @@ class StaticServiceDiscovery(ServiceDiscovery):
         health_check_include_attestation: bool = True,
         health_check_removal_threshold: int = 3,
         backend_health_check_timeout_seconds: int = 10,
+        circuit_breaker_cooldown_seconds: float = 5.0,
+        circuit_breaker_max_cooldown_seconds: float = 60.0,
     ):
         self.app = app
 
@@ -254,10 +350,79 @@ class StaticServiceDiscovery(ServiceDiscovery):
         # Track consecutive failures for each backend (key: hash, value: failure count)
         self.backend_failure_counts: Dict[str, int] = {}
 
+        # Circuit breaker configuration and state
+        self.circuit_breaker_cooldown = circuit_breaker_cooldown_seconds
+        self.circuit_breaker_max_cooldown = circuit_breaker_max_cooldown_seconds
+        self._circuit_breakers: Dict[str, CircuitBreaker] = {}
+
         if static_backend_health_checks and urls:
             self.start_health_check_task()
         self.prefill_model_labels = prefill_model_labels
         self.decode_model_labels = decode_model_labels
+
+    def _get_or_create_circuit_breaker(self, endpoint_hash: str) -> CircuitBreaker:
+        """Get or create a circuit breaker for an endpoint."""
+        if endpoint_hash not in self._circuit_breakers:
+            self._circuit_breakers[endpoint_hash] = CircuitBreaker(
+                cooldown_seconds=self.circuit_breaker_cooldown,
+                max_cooldown_seconds=self.circuit_breaker_max_cooldown,
+                current_cooldown=self.circuit_breaker_cooldown,
+            )
+        return self._circuit_breakers[endpoint_hash]
+
+    def record_request_success(self, url: str, model: str) -> None:
+        """
+        Record a successful request to a backend.
+        This helps the circuit breaker close after successful recovery.
+
+        Args:
+            url: The backend URL
+            model: The model name
+        """
+        endpoint_hash = self.get_model_endpoint_hash(url, model)
+        with self._lock:
+            circuit = self._get_or_create_circuit_breaker(endpoint_hash)
+            circuit.record_success()
+
+    def is_backend_available(self, url: str, model: str) -> bool:
+        """
+        Check if a backend is available for requests (circuit not open).
+
+        Args:
+            url: The backend URL
+            model: The model name
+
+        Returns:
+            True if the backend should receive requests, False otherwise
+        """
+        endpoint_hash = self.get_model_endpoint_hash(url, model)
+        with self._lock:
+            # Check if permanently unhealthy
+            if endpoint_hash in self.unhealthy_endpoint_hashes:
+                return False
+            # Check circuit breaker state
+            circuit = self._get_or_create_circuit_breaker(endpoint_hash)
+            return circuit.should_allow_request()
+
+    def get_available_endpoints(
+        self, endpoints: List["EndpointInfo"]
+    ) -> List["EndpointInfo"]:
+        """
+        Filter endpoints to only include those with open circuits.
+
+        Args:
+            endpoints: List of endpoint info objects
+
+        Returns:
+            Filtered list of available endpoints
+        """
+        available = []
+        for endpoint in endpoints:
+            for model in endpoint.model_names:
+                if self.is_backend_available(endpoint.url, model):
+                    available.append(endpoint)
+                    break  # Only need to check one model per endpoint
+        return available
 
     async def add_backend(self, url: str):
         logger.info(f"add_backend called with url: {url}")
@@ -522,10 +687,16 @@ class StaticServiceDiscovery(ServiceDiscovery):
             )
         }
 
-    def get_endpoint_info(self) -> List[EndpointInfo]:
+    def get_endpoint_info(
+        self, include_circuit_broken: bool = False
+    ) -> List[EndpointInfo]:
         """
         Get the URLs of the serving engines that are available for
         querying.
+
+        Args:
+            include_circuit_broken: If True, include endpoints with open circuits.
+                                   Default False excludes them for normal routing.
 
         Returns:
             a list of engine URLs
@@ -533,11 +704,23 @@ class StaticServiceDiscovery(ServiceDiscovery):
         with self._lock:
             endpoint_infos = []
             for i, (url, model) in enumerate(zip(self.urls, self.models)):
-                if (
-                    self.get_model_endpoint_hash(url, model)
-                    in self.unhealthy_endpoint_hashes
-                ):
+                endpoint_hash = self.get_model_endpoint_hash(url, model)
+
+                # Skip permanently unhealthy backends
+                if endpoint_hash in self.unhealthy_endpoint_hashes:
                     continue
+
+                # Skip circuit-broken backends unless explicitly requested
+                if not include_circuit_broken:
+                    circuit = self._get_or_create_circuit_breaker(endpoint_hash)
+                    if not circuit.should_allow_request():
+                        logger.debug(
+                            f"Skipping circuit-broken backend {url} for model {model} "
+                            f"(state: {circuit.state.value}, cooldown remaining: "
+                            f"{max(0, circuit.current_cooldown - (time.time() - circuit.last_failure_time)):.1f}s)"
+                        )
+                        continue
+
                 model_label = self.model_labels[i] if self.model_labels else "default"
                 endpoint_info = EndpointInfo(
                     url=url,
@@ -575,23 +758,46 @@ class StaticServiceDiscovery(ServiceDiscovery):
 
     def get_backend_health_status(self) -> List[Dict]:
         """
-        Get the health status of all backends.
+        Get the health status of all backends including circuit breaker state.
 
         Returns:
             List of dictionaries containing backend health information
         """
         with self._lock:
             backend_status = []
+            current_time = time.time()
+
             for i, (url, model) in enumerate(zip(self.urls, self.models)):
                 endpoint_hash = self.get_model_endpoint_hash(url, model)
                 failure_count = self.backend_failure_counts.get(endpoint_hash, 0)
-                is_healthy = endpoint_hash not in self.unhealthy_endpoint_hashes
+                is_permanently_unhealthy = (
+                    endpoint_hash in self.unhealthy_endpoint_hashes
+                )
+
+                # Get circuit breaker status
+                circuit = self._get_or_create_circuit_breaker(endpoint_hash)
+                circuit_state = circuit.state.value
+                is_accepting_requests = (
+                    circuit.should_allow_request() and not is_permanently_unhealthy
+                )
+
+                # Calculate cooldown remaining if circuit is open
+                cooldown_remaining = 0.0
+                if circuit.state == CircuitState.OPEN:
+                    cooldown_remaining = max(
+                        0,
+                        circuit.current_cooldown
+                        - (current_time - circuit.last_failure_time),
+                    )
 
                 status = {
                     "url": url,
                     "model": model,
                     "engine_id": self.engines_id[i],
-                    "healthy": is_healthy,
+                    "healthy": not is_permanently_unhealthy,
+                    "accepting_requests": is_accepting_requests,
+                    "circuit_state": circuit_state,
+                    "cooldown_remaining_seconds": round(cooldown_remaining, 1),
                     "failure_count": failure_count,
                     "failure_threshold": self.health_check_removal_threshold,
                     "model_label": (
@@ -645,17 +851,29 @@ class StaticServiceDiscovery(ServiceDiscovery):
         Mark a backend as unhealthy during request processing.
         This is called when a backend fails to respond to a request.
 
+        Uses circuit breaker pattern:
+        - First failure: Opens circuit (backend excluded for cooldown period)
+        - Circuit auto-recovers after cooldown to test if backend is back
+        - Repeated failures increase cooldown (exponential backoff)
+        - After threshold failures, backend is permanently removed
+
         Args:
             url: The backend URL that failed
             model: The model name that was being requested
 
         Returns:
-            bool: True if the backend should be removed from the pool, False otherwise
+            bool: True if the backend should be permanently removed from the pool, False otherwise
         """
         endpoint_hash = self.get_model_endpoint_hash(url, model)
 
         with self._lock:
-            # Increment failure count
+            # Get or create circuit breaker
+            circuit = self._get_or_create_circuit_breaker(endpoint_hash)
+
+            # Record the failure in circuit breaker (this opens the circuit)
+            circuit.record_failure()
+
+            # Increment total failure count for permanent removal tracking
             self.backend_failure_counts[endpoint_hash] = (
                 self.backend_failure_counts.get(endpoint_hash, 0) + 1
             )
@@ -663,23 +881,27 @@ class StaticServiceDiscovery(ServiceDiscovery):
 
             logger.warning(
                 f"Backend {url} with model {model} failed during request processing. "
-                f"Failure count: {failure_count}/{self.health_check_removal_threshold}"
+                f"Circuit state: {circuit.state.value}, "
+                f"Total failures: {failure_count}/{self.health_check_removal_threshold}, "
+                f"Cooldown: {circuit.current_cooldown}s"
             )
 
-            # Check if we should remove this backend
+            # Check if we should permanently remove this backend
             if failure_count >= self.health_check_removal_threshold:
                 logger.error(
                     f"Backend {url} with model {model} exceeded failure threshold "
                     f"({failure_count} >= {self.health_check_removal_threshold}). "
-                    f"Removing from pool."
+                    f"Permanently removing from pool."
                 )
 
-                # Add to unhealthy endpoints list
+                # Add to unhealthy endpoints list (permanent removal)
                 if endpoint_hash not in self.unhealthy_endpoint_hashes:
                     self.unhealthy_endpoint_hashes.append(endpoint_hash)
 
-                # Remove from failure counts since it's now permanently unhealthy
+                # Clean up tracking data
                 del self.backend_failure_counts[endpoint_hash]
+                if endpoint_hash in self._circuit_breakers:
+                    del self._circuit_breakers[endpoint_hash]
 
                 # Increment Prometheus counter for removed backends
                 try:
