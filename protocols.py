@@ -27,8 +27,7 @@ class OpenAIBaseModel(BaseModel):
             extra_fields = data.keys() - field_names
             if extra_fields:
                 logger.warning(
-                    "The following fields were present in the request "
-                    "but ignored: %s",
+                    "The following fields were present in the request but ignored: %s",
                     extra_fields,
                 )
         return data

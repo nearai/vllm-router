@@ -100,7 +100,7 @@ async def route_is_sleeping(request: Request, background_tasks: BackgroundTasks)
 async def show_models():
     """
     Returns a list of all models available in the stack.
-    
+
     Note: This includes models on temporarily circuit-broken backends since the models
     still exist, they're just temporarily unavailable for requests.
 
@@ -148,7 +148,7 @@ async def show_models():
 async def get_engine_instances():
     """
     Returns a list of all engine instances available in the stack.
-    
+
     Note: This includes engines that are temporarily circuit-broken since they
     still exist, they're just temporarily unavailable for requests.
 

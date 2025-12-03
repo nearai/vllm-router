@@ -136,13 +136,13 @@ async def process_request(
             if new_connection:
                 logger.debug(
                     f"[{request_id}] NEW connection to {backend_url}: "
-                    f"TTFB={time_to_response_headers*1000:.2f}ms "
+                    f"TTFB={time_to_response_headers * 1000:.2f}ms "
                     f"({http_version}, new_conns={len(new_connections)}, total_pool={len(conn_ids_after)})"
                 )
             else:
                 logger.debug(
                     f"[{request_id}] reused connection to {backend_url}: "
-                    f"TTFB={time_to_response_headers*1000:.2f}ms "
+                    f"TTFB={time_to_response_headers * 1000:.2f}ms "
                     f"({http_version}, pool_size={len(conn_ids_after)})"
                 )
             # Yield headers and status code first.
@@ -282,9 +282,9 @@ async def process_request(
     router_overhead = total_time - backend_time
     if total_time > 0:
         logger.debug(
-            f"[{request_id}] timing: total={total_time*1000:.2f}ms, "
-            f"backend={backend_time*1000:.2f}ms, "
-            f"router_overhead={router_overhead*1000:.2f}ms ({router_overhead/total_time*100:.1f}%)"
+            f"[{request_id}] timing: total={total_time * 1000:.2f}ms, "
+            f"backend={backend_time * 1000:.2f}ms, "
+            f"router_overhead={router_overhead * 1000:.2f}ms ({router_overhead / total_time * 100:.1f}%)"
         )
 
     # if debug_request:

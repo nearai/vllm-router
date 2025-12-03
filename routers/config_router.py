@@ -24,7 +24,9 @@ async def add_backend(request: AddBackendRequest):
     logger.debug(f"service_discovery type: {type(service_discovery).__name__}")
 
     if not isinstance(service_discovery, StaticServiceDiscovery):
-        logger.error(f"service discovery is not static, got {type(service_discovery).__name__}")
+        logger.error(
+            f"service discovery is not static, got {type(service_discovery).__name__}"
+        )
         raise HTTPException(status_code=400, detail="Service discovery is not static")
 
     logger.info(f"calling service_discovery.add_backend for {request.url}")

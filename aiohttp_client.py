@@ -24,7 +24,6 @@ DNS_CACHE_TTL = 300
 
 
 class AiohttpClientWrapper:
-
     async_client = None
 
     def start(self):
@@ -35,7 +34,9 @@ class AiohttpClientWrapper:
             resolver = AsyncResolver()
             logger.info("Using AsyncResolver (aiodns) for DNS resolution")
         except Exception as e:
-            logger.warning(f"Failed to create AsyncResolver: {e}, using default resolver")
+            logger.warning(
+                f"Failed to create AsyncResolver: {e}, using default resolver"
+            )
             resolver = None
 
         connector = TCPConnector(

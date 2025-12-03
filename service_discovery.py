@@ -322,9 +322,9 @@ class StaticServiceDiscovery(ServiceDiscovery):
 
         # Validate that if both are provided, they have the same length
         if urls and models:
-            assert len(urls) == len(
-                models
-            ), "URLs and models should have the same length"
+            assert len(urls) == len(models), (
+                "URLs and models should have the same length"
+            )
         elif urls and not models:
             raise ValueError("Models must be provided when URLs are specified")
         elif models and not urls:

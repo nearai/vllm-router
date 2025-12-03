@@ -56,7 +56,6 @@ class BackendDiscoveryService:
     def parse_tailscale_status(self) -> List[Dict]:
         """
         Parse Tailscale status JSON file and extract all online peers.
-        Excludes vllm-router peers to prevent infinite routing loops.
 
         Returns:
             List of peer dictionaries with DNS names and other info
@@ -95,13 +94,6 @@ class BackendDiscoveryService:
                         continue
 
                     online_peer_count += 1
-
-                    # Skip vllm-router peers to prevent infinite routing loops
-                    if hostname.startswith("vllm-router"):
-                        logger.debug(
-                            f"Skipping vllm-router peer to prevent routing loops: {hostname}"
-                        )
-                        continue
 
                     dns_name = peer_data.get("DNSName", "")
                     if dns_name:
@@ -192,6 +184,31 @@ class BackendDiscoveryService:
         )
         return True
 
+    async def _is_router(self, client: aiohttp.ClientSession, backend_url: str) -> bool:
+        """
+        Check if a backend is a vllm-router by inspecting its /version endpoint.
+
+        Returns True if the backend identifies as type "router", False otherwise.
+        """
+        version_url = f"{backend_url}/version"
+        try:
+            async with client.get(
+                version_url,
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+            ) as response:
+                if response.status != 200:
+                    return False
+                data = await response.json()
+                is_router = data.get("type") == "router"
+                if is_router:
+                    logger.debug(
+                        f"Backend {backend_url} identified as router, skipping"
+                    )
+                return is_router
+        except Exception:
+            # If we can't check /version, assume it's not a router
+            return False
+
     async def test_backend_health(self, peer_dns: str, port: int) -> Optional[str]:
         """
         Test if a backend is healthy by checking:
@@ -214,6 +231,10 @@ class BackendDiscoveryService:
         # Create a new session for each health check since we run in a separate event loop
         async with aiohttp.ClientSession() as client:
             try:
+                # Check if this is a router (to prevent infinite routing loops)
+                if await self._is_router(client, backend_url):
+                    return None
+
                 headers = {}
                 if openai_api_key := os.getenv("OPENAI_API_KEY"):
                     headers["Authorization"] = f"Bearer {openai_api_key}"
@@ -342,16 +363,16 @@ class BackendDiscoveryService:
                     healthy_backends.append(result)
                     successful_results += 1
                     logger.debug(
-                        f"Health check result {i+1}/{len(results)}: SUCCESS - {result}"
+                        f"Health check result {i + 1}/{len(results)}: SUCCESS - {result}"
                     )
                 elif isinstance(result, Exception):
                     failed_results += 1
                     logger.debug(
-                        f"Health check result {i+1}/{len(results)}: EXCEPTION - {result}"
+                        f"Health check result {i + 1}/{len(results)}: EXCEPTION - {result}"
                     )
                 else:
                     failed_results += 1
-                    logger.debug(f"Health check result {i+1}/{len(results)}: FAILED")
+                    logger.debug(f"Health check result {i + 1}/{len(results)}: FAILED")
 
             logger.info(
                 f"Health check completed: {successful_results} healthy, {failed_results} unhealthy backends found"

@@ -95,12 +95,12 @@ async def lifespan(app: FastAPI):
         await service_discovery.initialize_client_sessions()
 
     app.state.event_loop = asyncio.get_event_loop()
-    
+
     # Setup signal handlers for graceful shutdown
     setup_signal_handlers(app.state.event_loop)
 
     yield
-    
+
     # Wait for in-flight requests to complete during graceful shutdown
     shutdown_manager = get_shutdown_manager()
     if shutdown_manager is not None and shutdown_manager.is_shutting_down:
@@ -108,7 +108,7 @@ async def lifespan(app: FastAPI):
             f"Waiting for {shutdown_manager.in_flight_requests} in-flight requests to complete..."
         )
         await shutdown_manager.wait_for_requests()
-    
+
     await app.state.httpx_client_wrapper.stop()
     await app.state.aiohttp_client_wrapper.stop()
 
@@ -150,7 +150,7 @@ def initialize_all(app: FastAPI, args):
     # Initialize the root logger with the specified format
     from vllm_router.log import init_logger
     import logging
-    
+
     # Convert string log level to logging constant
     log_level_map = {
         "critical": logging.CRITICAL,
@@ -160,9 +160,11 @@ def initialize_all(app: FastAPI, args):
         "debug": logging.DEBUG,
         "trace": logging.DEBUG,  # Map trace to debug
     }
-    
+
     log_level = log_level_map.get(args.log_level.lower(), logging.INFO)
-    root_logger = init_logger("vllm_router", log_level=log_level, log_format=args.log_format)
+    root_logger = init_logger(
+        "vllm_router", log_level=log_level, log_format=args.log_format
+    )
 
     # Reconfigure all existing vllm_router loggers to use the same level and format
     # (they were created at module import time with default values)
@@ -174,7 +176,7 @@ def initialize_all(app: FastAPI, args):
     uvicorn_logger = logging.getLogger("uvicorn")
     uvicorn_logger.handlers.clear()
     uvicorn_logger.setLevel(log_level)
-    
+
     # Add handlers to uvicorn logger
     for handler in root_logger.handlers:
         uvicorn_logger.addHandler(handler)
@@ -192,8 +194,16 @@ def initialize_all(app: FastAPI, args):
         initialize_service_discovery(
             ServiceDiscoveryType.STATIC,
             app=app,
-            urls=parse_static_urls(args.static_backends) if args.static_backends else None,
-            models=parse_comma_separated_args(args.static_models) if args.static_models else None,
+            urls=(
+                parse_static_urls(args.static_backends)
+                if args.static_backends
+                else None
+            ),
+            models=(
+                parse_comma_separated_args(args.static_models)
+                if args.static_models
+                else None
+            ),
             aliases=(
                 parse_static_aliases(args.static_aliases)
                 if args.static_aliases
@@ -295,11 +305,13 @@ app.state.httpx_client_wrapper = HttpxClientWrapper()
 
 def main():
     args = parse_args()
-    
+
     # Initialize graceful shutdown manager
     initialize_shutdown_manager(timeout=args.graceful_shutdown_timeout)
-    logger.info(f"Graceful shutdown enabled with timeout: {args.graceful_shutdown_timeout}s")
-    
+    logger.info(
+        f"Graceful shutdown enabled with timeout: {args.graceful_shutdown_timeout}s"
+    )
+
     initialize_all(app, args)
     if args.log_stats:
         threading.Thread(

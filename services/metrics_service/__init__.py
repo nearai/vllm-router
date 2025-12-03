@@ -62,5 +62,6 @@ vllm_router_backends_unhealthy = Gauge(
     "vllm_router_backends_unhealthy", "Number of unhealthy backends"
 )
 vllm_router_backends_removed_total = Counter(
-    "vllm_router_backends_removed_total", "Total number of backends permanently removed due to health check failures"
+    "vllm_router_backends_removed_total",
+    "Total number of backends permanently removed due to health check failures",
 )

@@ -1,4 +1,5 @@
 import json
+import os
 from fastapi import APIRouter, Response
 from fastapi.responses import JSONResponse
 
@@ -6,17 +7,32 @@ from vllm_router.dynamic_config import get_dynamic_config_watcher
 from vllm_router.graceful_shutdown import get_shutdown_manager
 from vllm_router.service_discovery import get_service_discovery
 from vllm_router.stats.engine_stats import get_engine_stats_scraper
-from vllm_router.version import __version__
 from vllm_router.log import init_logger
 
 logger = init_logger(__name__)
 
 health_router = APIRouter()
 
+GIT_REV_PATH = "/etc/.GIT_REV"
+
+
+def _read_git_rev() -> str:
+    """Read git revision from /etc/.GIT_REV file."""
+    try:
+        if os.path.exists(GIT_REV_PATH):
+            with open(GIT_REV_PATH, "r") as f:
+                return f.read().strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
+GIT_REV = _read_git_rev()
+
 
 @health_router.get("/version")
 async def show_version():
-    ver = {"version": __version__}
+    ver = {"version": GIT_REV, "type": "router"}
     return JSONResponse(content=ver)
 
 

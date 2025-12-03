@@ -13,7 +13,6 @@ def build_format(color):
 
 
 class CustomFormatter(logging.Formatter):
-
     grey = "\x1b[1m"
     green = "\x1b[32;20m"
     yellow = "\x1b[33;20m"
@@ -37,7 +36,7 @@ class CustomFormatter(logging.Formatter):
 
 class JsonFormatter(logging.Formatter):
     """JSON formatter for structured logging."""
-    
+
     def format(self, record: logging.LogRecord) -> str:
         """Format log record as JSON."""
         # Create the base log entry
@@ -50,30 +49,47 @@ class JsonFormatter(logging.Formatter):
             "line_number": record.lineno,
             "function": record.funcName,
         }
-        
+
         # Add exception info if present
         if record.exc_info:
             log_entry["exception"] = self.formatException(record.exc_info)
         else:
             log_entry["exception"] = None
-            
+
         # Add stack trace if present
         if record.stack_info:
             log_entry["stack_trace"] = self.formatStack(record.stack_info)
         else:
             log_entry["stack_trace"] = None
-            
+
         # Add any extra fields that might be present
         for key, value in record.__dict__.items():
             if key not in {
-                'name', 'msg', 'args', 'levelname', 'levelno', 'pathname',
-                'filename', 'module', 'lineno', 'funcName', 'created',
-                'msecs', 'relativeCreated', 'thread', 'threadName',
-                'processName', 'process', 'getMessage', 'exc_info',
-                'exc_text', 'stack_info', 'message'
+                "name",
+                "msg",
+                "args",
+                "levelname",
+                "levelno",
+                "pathname",
+                "filename",
+                "module",
+                "lineno",
+                "funcName",
+                "created",
+                "msecs",
+                "relativeCreated",
+                "thread",
+                "threadName",
+                "processName",
+                "process",
+                "getMessage",
+                "exc_info",
+                "exc_text",
+                "stack_info",
+                "message",
             }:
                 log_entry[key] = value
-        
+
         return json.dumps(log_entry, default=str, ensure_ascii=False)
 
 
@@ -89,12 +105,12 @@ class MaxLevelFilter(logging.Filter):
 def init_logger(name: str, log_level=logging.DEBUG, log_format: str = "text") -> Logger:
     """
     Initialize a logger with specified format and level.
-    
+
     Args:
         name: Logger name
         log_level: Logging level (default: DEBUG)
         log_format: Log format - "text" or "json" (default: "text")
-    
+
     Returns:
         Configured logger instance
     """
@@ -123,7 +139,7 @@ def init_logger(name: str, log_level=logging.DEBUG, log_format: str = "text") ->
     error_stream.setLevel(logging.WARNING)
     error_stream.setFormatter(formatter)
     logger.addHandler(error_stream)
-    
+
     logger.propagate = False
 
     return logger
