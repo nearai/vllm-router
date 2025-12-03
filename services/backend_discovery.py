@@ -362,25 +362,50 @@ class BackendDiscoveryService:
         )
         return healthy_backends
 
-    async def add_healthy_backends(self, healthy_backends: List[str]) -> None:
+    async def sync_backends(self, healthy_backends: List[str]) -> None:
         """
-        Add healthy backends to the service discovery.
+        Synchronize backends with the service discovery.
+        Adds new healthy backends and removes backends that are no longer healthy.
 
         Args:
-            healthy_backends: List of healthy backend URLs
+            healthy_backends: List of currently healthy backend URLs
         """
         logger.debug(
-            f"Starting to add {len(healthy_backends)} healthy backends to service discovery"
+            f"Starting backend sync with {len(healthy_backends)} healthy backends"
         )
         service_discovery = get_service_discovery()
         if not service_discovery:
-            logger.error("Service discovery not initialized - cannot add backends")
+            logger.error("Service discovery not initialized - cannot sync backends")
             return
 
         logger.debug(
             f"Service discovery available, currently tracking {len(self._discovered_backends)} backends"
         )
 
+        healthy_set = set(healthy_backends)
+
+        # Find backends to remove (previously discovered but no longer healthy)
+        backends_to_remove = self._discovered_backends - healthy_set
+        if backends_to_remove:
+            logger.info(
+                f"Removing {len(backends_to_remove)} stale backends: {backends_to_remove}"
+            )
+            for backend_url in backends_to_remove:
+                try:
+                    logger.info(f"Removing stale backend: {backend_url}")
+                    service_discovery.remove_backend(backend_url)
+                    self._discovered_backends.discard(backend_url)
+                    logger.debug(
+                        f"Successfully removed backend {backend_url} from service discovery"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to remove backend {backend_url}: {e}")
+                    logger.debug(
+                        f"Error details for backend {backend_url}: {type(e).__name__}: {e}",
+                        exc_info=True,
+                    )
+
+        # Add new healthy backends
         new_backends_added = 0
         for backend_url in healthy_backends:
             if backend_url not in self._discovered_backends:
@@ -402,7 +427,7 @@ class BackendDiscoveryService:
                 logger.debug(f"Backend {backend_url} already discovered, skipping")
 
         logger.info(
-            f"Backend addition completed: {new_backends_added} new backends added, {len(self._discovered_backends)} total tracked"
+            f"Backend sync completed: {new_backends_added} added, {len(backends_to_remove)} removed, {len(self._discovered_backends)} total tracked"
         )
 
     async def discovery_loop(self) -> None:
@@ -418,8 +443,8 @@ class BackendDiscoveryService:
                 # Discover healthy backends
                 healthy_backends = await self.discover_backends()
 
-                # Add new healthy backends
-                await self.add_healthy_backends(healthy_backends)
+                # Sync backends: add new ones and remove stale ones
+                await self.sync_backends(healthy_backends)
 
                 logger.info(
                     f"Discovery cycle completed. Found {len(healthy_backends)} healthy backends"

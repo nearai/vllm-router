@@ -29,13 +29,13 @@ async def health() -> Response:
     the engine stats scraper. If either component is down, it returns a
     503 response with the appropriate status message. If both components
     are healthy, it returns a 200 OK response.
-    
+
     During graceful shutdown, returns 503 to signal load balancers to stop
     sending traffic to this instance.
 
     Returns:
         Response: A JSONResponse with status code 503 if a component is
-        down or the server is shutting down, or a plain Response with 
+        down or the server is shutting down, or a plain Response with
         status code 200 if all components are healthy.
     """
     # Check if server is shutting down
@@ -93,7 +93,9 @@ async def backends() -> Response:
     # Check if the service discovery has the method (only StaticServiceDiscovery has it)
     if hasattr(service_discovery, "get_backend_health_status"):
         backend_status = service_discovery.get_backend_health_status()
-        logger.info(f"returning {len(backend_status)} backends, {sum(1 for b in backend_status if b['healthy'])} healthy, {sum(1 for b in backend_status if not b['healthy'])} unhealthy")
+        logger.info(
+            f"returning {len(backend_status)} backends, {sum(1 for b in backend_status if b['healthy'])} healthy, {sum(1 for b in backend_status if not b['healthy'])} unhealthy"
+        )
         return JSONResponse(
             content={
                 "backends": backend_status,
@@ -104,8 +106,12 @@ async def backends() -> Response:
             status_code=200,
         )
     else:
-        logger.warning("backend health status not available for this service discovery type")
+        logger.warning(
+            "backend health status not available for this service discovery type"
+        )
         return JSONResponse(
-            content={"error": "Backend health status not available for this service discovery type"},
+            content={
+                "error": "Backend health status not available for this service discovery type"
+            },
             status_code=501,
         )
