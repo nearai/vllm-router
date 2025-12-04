@@ -416,7 +416,7 @@ def parse_args():
         "--backend-connect-timeout",
         type=float,
         default=5.0,
-        help="Timeout in seconds for establishing a connection to a backend (default: 30.0). "
+        help="Timeout in seconds for establishing a connection to a backend (default: 5.0). "
         "This is a short timeout to quickly detect dead backends.",
     )
     parser.add_argument(
@@ -426,6 +426,27 @@ def parse_args():
         help="Timeout in seconds between receiving chunks from a backend (default: 300.0 / 5 minutes). "
         "For streaming requests, this is the max time allowed between tokens. "
         "Set to 0 for no read timeout (not recommended).",
+    )
+
+    # Circuit breaker configuration
+    parser.add_argument(
+        "--circuit-breaker-threshold",
+        type=int,
+        default=3,
+        help="Number of consecutive failures required to open the circuit breaker (default: 3). "
+        "Higher values make the circuit breaker less aggressive.",
+    )
+    parser.add_argument(
+        "--circuit-breaker-cooldown",
+        type=float,
+        default=5.0,
+        help="Initial cooldown in seconds when circuit breaker opens (default: 5.0).",
+    )
+    parser.add_argument(
+        "--circuit-breaker-max-cooldown",
+        type=float,
+        default=30.0,
+        help="Maximum cooldown in seconds with exponential backoff (default: 30.0).",
     )
 
     args = parser.parse_args()

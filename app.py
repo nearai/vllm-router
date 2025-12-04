@@ -230,6 +230,9 @@ def initialize_all(app: FastAPI, args):
             health_check_include_attestation=args.health_check_include_attestation,
             health_check_removal_threshold=args.health_check_removal_threshold,
             backend_health_check_timeout_seconds=args.backend_health_check_timeout_seconds,
+            circuit_breaker_threshold=args.circuit_breaker_threshold,
+            circuit_breaker_cooldown_seconds=args.circuit_breaker_cooldown,
+            circuit_breaker_max_cooldown_seconds=args.circuit_breaker_max_cooldown,
         )
     else:
         raise ValueError(f"Invalid service discovery type: {args.service_discovery}")

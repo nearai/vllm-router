@@ -43,47 +43,60 @@ class CircuitBreaker:
 
     state: CircuitState = CircuitState.CLOSED
     failure_count: int = 0
+    consecutive_failures: int = 0  # Consecutive failures (resets on success)
     last_failure_time: float = 0.0
     last_success_time: float = 0.0
     consecutive_successes: int = 0
+    failure_threshold: int = 3  # Failures required to open circuit
     cooldown_seconds: float = 5.0  # Initial cooldown when circuit opens
-    max_cooldown_seconds: float = 60.0  # Maximum cooldown with backoff
+    max_cooldown_seconds: float = 30.0  # Maximum cooldown with backoff
     current_cooldown: float = 5.0  # Current cooldown (increases with backoff)
+    endpoint_id: str = ""  # For logging
 
     def record_failure(self) -> None:
         """Record a failure and potentially open the circuit."""
         self.failure_count += 1
+        self.consecutive_failures += 1
         self.last_failure_time = time.time()
         self.consecutive_successes = 0
 
         if self.state == CircuitState.CLOSED:
-            # Open circuit on first failure for immediate protection
-            self.state = CircuitState.OPEN
-            self.current_cooldown = self.cooldown_seconds
-            logger.warning(
-                f"Circuit OPENED after failure (cooldown: {self.current_cooldown}s)"
-            )
+            # Only open circuit after reaching failure threshold
+            if self.consecutive_failures >= self.failure_threshold:
+                self.state = CircuitState.OPEN
+                self.current_cooldown = self.cooldown_seconds
+                logger.warning(
+                    f"Circuit OPENED for {self.endpoint_id} after {self.consecutive_failures} consecutive failures "
+                    f"(cooldown: {self.current_cooldown}s)"
+                )
+            else:
+                logger.debug(
+                    f"Circuit failure {self.consecutive_failures}/{self.failure_threshold} for {self.endpoint_id} "
+                    f"(still CLOSED)"
+                )
         elif self.state == CircuitState.HALF_OPEN:
             # Failed during test, reopen with increased cooldown
             self.state = CircuitState.OPEN
             self.current_cooldown = min(
-                self.current_cooldown * 2, self.max_cooldown_seconds
+                self.current_cooldown * 1.5, self.max_cooldown_seconds
             )
             logger.warning(
-                f"Circuit reopened from half-open, backoff cooldown: {self.current_cooldown}s"
+                f"Circuit reopened from HALF_OPEN for {self.endpoint_id}, "
+                f"backoff cooldown: {self.current_cooldown:.1f}s"
             )
 
     def record_success(self) -> None:
         """Record a success and potentially close the circuit."""
         self.last_success_time = time.time()
         self.consecutive_successes += 1
+        self.consecutive_failures = 0  # Reset consecutive failures on success
 
         if self.state == CircuitState.HALF_OPEN:
             # Success during test, close the circuit
             self.state = CircuitState.CLOSED
             self.failure_count = 0
             self.current_cooldown = self.cooldown_seconds  # Reset cooldown
-            logger.info("Circuit CLOSED after successful test")
+            logger.info(f"Circuit CLOSED for {self.endpoint_id} after successful test")
         elif self.state == CircuitState.CLOSED:
             # Ongoing success, reset failure count periodically
             if self.consecutive_successes >= 3:
@@ -100,9 +113,14 @@ class CircuitBreaker:
             if elapsed >= self.current_cooldown:
                 self.state = CircuitState.HALF_OPEN
                 logger.info(
-                    f"Circuit transitioning to HALF_OPEN after {elapsed:.1f}s cooldown"
+                    f"Circuit transitioning to HALF_OPEN for {self.endpoint_id} "
+                    f"after {elapsed:.1f}s cooldown"
                 )
                 return True
+            logger.debug(
+                f"Circuit OPEN for {self.endpoint_id}, cooldown remaining: "
+                f"{self.current_cooldown - elapsed:.1f}s"
+            )
             return False
 
         if self.state == CircuitState.HALF_OPEN:
@@ -309,8 +327,9 @@ class StaticServiceDiscovery(ServiceDiscovery):
         health_check_include_attestation: bool = True,
         health_check_removal_threshold: int = 3,
         backend_health_check_timeout_seconds: int = 10,
+        circuit_breaker_threshold: int = 3,
         circuit_breaker_cooldown_seconds: float = 5.0,
-        circuit_breaker_max_cooldown_seconds: float = 60.0,
+        circuit_breaker_max_cooldown_seconds: float = 30.0,
     ):
         self.app = app
 
@@ -351,9 +370,15 @@ class StaticServiceDiscovery(ServiceDiscovery):
         self.backend_failure_counts: Dict[str, int] = {}
 
         # Circuit breaker configuration and state
+        self.circuit_breaker_threshold = circuit_breaker_threshold
         self.circuit_breaker_cooldown = circuit_breaker_cooldown_seconds
         self.circuit_breaker_max_cooldown = circuit_breaker_max_cooldown_seconds
         self._circuit_breakers: Dict[str, CircuitBreaker] = {}
+
+        logger.info(
+            f"Circuit breaker config: threshold={circuit_breaker_threshold} failures, "
+            f"cooldown={circuit_breaker_cooldown_seconds}s, max_cooldown={circuit_breaker_max_cooldown_seconds}s"
+        )
 
         if static_backend_health_checks and urls:
             self.start_health_check_task()
@@ -364,9 +389,11 @@ class StaticServiceDiscovery(ServiceDiscovery):
         """Get or create a circuit breaker for an endpoint."""
         if endpoint_hash not in self._circuit_breakers:
             self._circuit_breakers[endpoint_hash] = CircuitBreaker(
+                failure_threshold=self.circuit_breaker_threshold,
                 cooldown_seconds=self.circuit_breaker_cooldown,
                 max_cooldown_seconds=self.circuit_breaker_max_cooldown,
                 current_cooldown=self.circuit_breaker_cooldown,
+                endpoint_id=endpoint_hash,
             )
         return self._circuit_breakers[endpoint_hash]
 
