@@ -449,6 +449,23 @@ def parse_args():
         help="Maximum cooldown in seconds with exponential backoff (default: 30.0).",
     )
 
+    # Request throttling
+    parser.add_argument(
+        "--max-concurrent-requests-per-model",
+        type=int,
+        default=0,
+        help="Maximum concurrent requests allowed per model (default: 0 = disabled). "
+        "When set, requests exceeding the limit will wait (not fail) until a slot is available.",
+    )
+
+    # Health check configuration
+    parser.add_argument(
+        "--health-check-interval",
+        type=int,
+        default=60,
+        help="Interval in seconds between health checks (default: 60).",
+    )
+
     args = parser.parse_args()
     args = load_initial_config_from_config_file_if_required(parser, args)
 

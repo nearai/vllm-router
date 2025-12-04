@@ -13,11 +13,12 @@
 # limitations under the License.
 
 # --- Request Processing & Routing ---
+import asyncio
 import json
 import os
 import time
 import uuid
-from typing import Optional
+from typing import Dict, Optional
 
 import httpx
 from fastapi import BackgroundTasks, HTTPException, Request, UploadFile
@@ -41,6 +42,106 @@ from vllm_router.utils import replace_model_in_request_body, update_content_leng
 from vllm_router.services.metrics_service import num_incoming_requests_total
 
 logger = init_logger(__name__)
+
+
+class ModelThrottler:
+    """
+    Throttles concurrent requests per model by waiting, never rejecting.
+
+    Uses asyncio.Semaphore to limit concurrent requests per model.
+    When the limit is reached, new requests wait until a slot becomes available.
+    """
+
+    def __init__(self, max_concurrent_per_model: int):
+        """
+        Initialize the throttler.
+
+        Args:
+            max_concurrent_per_model: Maximum concurrent requests allowed per model.
+                                      If 0, throttling is disabled.
+        """
+        self.max_concurrent = max_concurrent_per_model
+        self._semaphores: Dict[str, asyncio.Semaphore] = {}
+        self._lock = asyncio.Lock()
+        self._waiting_counts: Dict[str, int] = {}  # Track waiting requests per model
+        logger.info(
+            f"ModelThrottler initialized with max_concurrent_per_model={max_concurrent_per_model}"
+        )
+
+    @property
+    def enabled(self) -> bool:
+        """Check if throttling is enabled."""
+        return self.max_concurrent > 0
+
+    async def acquire(self, model: str) -> None:
+        """
+        Acquire a slot for the given model, waiting if necessary.
+
+        This method never fails - it waits until a slot is available.
+
+        Args:
+            model: The model name to acquire a slot for.
+        """
+        if not self.enabled:
+            return
+
+        async with self._lock:
+            if model not in self._semaphores:
+                self._semaphores[model] = asyncio.Semaphore(self.max_concurrent)
+                self._waiting_counts[model] = 0
+
+        # Track waiting count for logging
+        async with self._lock:
+            self._waiting_counts[model] += 1
+            waiting = self._waiting_counts[model]
+
+        if waiting > 1:
+            logger.debug(
+                f"Request waiting for throttle slot for model {model} "
+                f"(waiting: {waiting}, max_concurrent: {self.max_concurrent})"
+            )
+
+        start_wait = time.time()
+        await self._semaphores[model].acquire()
+        wait_time = time.time() - start_wait
+
+        async with self._lock:
+            self._waiting_counts[model] -= 1
+
+        if wait_time > 0.1:  # Log if waited more than 100ms
+            logger.debug(
+                f"Acquired throttle slot for model {model} after {wait_time:.2f}s wait"
+            )
+
+    def release(self, model: str) -> None:
+        """
+        Release a slot for the given model.
+
+        Args:
+            model: The model name to release a slot for.
+        """
+        if not self.enabled:
+            return
+
+        if model in self._semaphores:
+            self._semaphores[model].release()
+
+    def get_stats(self) -> Dict[str, Dict[str, int]]:
+        """Get current throttling statistics per model."""
+        stats = {}
+        for model, sem in self._semaphores.items():
+            # Semaphore._value gives available slots
+            available = sem._value if hasattr(sem, "_value") else self.max_concurrent
+            in_use = self.max_concurrent - available
+            waiting = self._waiting_counts.get(model, 0)
+            stats[model] = {
+                "in_use": in_use,
+                "available": available,
+                "waiting": waiting,
+                "max_concurrent": self.max_concurrent,
+            }
+        return stats
+
 
 _HOP_BY_HOP_HEADERS = {
     "host",
@@ -464,6 +565,50 @@ async def route_general_request(
 
     logger.debug(f"Routing request {request_id} for model: {requested_model}")
 
+    # Apply throttling if enabled (waits for slot, never rejects)
+    throttler: Optional[ModelThrottler] = getattr(
+        request.app.state, "model_throttler", None
+    )
+    if throttler and throttler.enabled:
+        await throttler.acquire(requested_model)
+
+    try:
+        return await _route_request_internal(
+            request=request,
+            endpoint=endpoint,
+            background_tasks=background_tasks,
+            request_id=request_id,
+            request_body=request_body,
+            request_json=request_json,
+            requested_model=requested_model,
+            endpoints=endpoints,
+            session_id_display=session_id_display,
+            service_discovery=service_discovery,
+            engine_stats=engine_stats if not request_endpoint else None,
+            request_stats=request_stats if not request_endpoint else None,
+            request_endpoint=request_endpoint,
+        )
+    finally:
+        if throttler and throttler.enabled:
+            throttler.release(requested_model)
+
+
+async def _route_request_internal(
+    request: Request,
+    endpoint: str,
+    background_tasks: BackgroundTasks,
+    request_id: str,
+    request_body: bytes,
+    request_json: dict,
+    requested_model: str,
+    endpoints: list,
+    session_id_display: str,
+    service_discovery,
+    engine_stats,
+    request_stats,
+    request_endpoint: Optional[str],
+):
+    """Internal request routing logic, separated to support throttling wrapper."""
     # Track URLs we've already tried to avoid retrying the same backend
     tried_urls = set()
 

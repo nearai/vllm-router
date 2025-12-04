@@ -5,16 +5,80 @@ import os
 import json
 import re
 import resource
+import threading
 import wave
 from typing import Optional
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from fastapi.requests import Request
 from starlette.datastructures import MutableHeaders
 
 from vllm_router.log import init_logger
 
 logger = init_logger(__name__)
+
+
+# --- Connection Pooling for Health Checks ---
+# Shared session with connection pooling to reduce TCP connection overhead
+_health_check_session: Optional[requests.Session] = None
+_health_check_session_lock = threading.Lock()
+
+
+def get_health_check_session() -> requests.Session:
+    """
+    Get or create a shared requests.Session with connection pooling.
+
+    This session reuses TCP connections instead of creating new ones for each
+    health check request, significantly reducing connection overhead and
+    preventing SYN flooding on backend ports.
+
+    Returns:
+        A configured requests.Session with connection pooling.
+    """
+    global _health_check_session
+
+    if _health_check_session is not None:
+        return _health_check_session
+
+    with _health_check_session_lock:
+        # Double-check after acquiring lock
+        if _health_check_session is not None:
+            return _health_check_session
+
+        session = requests.Session()
+
+        # Configure connection pooling
+        # pool_connections: Number of connection pools to cache
+        # pool_maxsize: Max connections per pool (per host)
+        adapter = HTTPAdapter(
+            pool_connections=10,  # Cache up to 10 different hosts
+            pool_maxsize=20,  # Up to 20 connections per host
+            max_retries=Retry(total=0),  # No retries (handle at higher level)
+        )
+
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+
+        logger.info(
+            "Health check session initialized with connection pooling "
+            "(pool_connections=10, pool_maxsize=20)"
+        )
+
+        _health_check_session = session
+        return _health_check_session
+
+
+def close_health_check_session() -> None:
+    """Close the shared health check session."""
+    global _health_check_session
+
+    with _health_check_session_lock:
+        if _health_check_session is not None:
+            _health_check_session.close()
+            _health_check_session = None
+            logger.info("Health check session closed")
 
 # prepare a WAV byte to prevent repeatedly generating it
 # Generate a 0.1 second silent audio file
@@ -229,6 +293,9 @@ def is_model_healthy(url: str, model: str, model_type: str) -> bool:
 
     logger.debug(f"Starting health check for {model_type} model {model} at {full_url}")
 
+    # Use shared session with connection pooling
+    session = get_health_check_session()
+
     try:
         if model_type == "transcription":
             # for transcription, the backend expects multipart/form-data with a file
@@ -236,7 +303,7 @@ def is_model_healthy(url: str, model: str, model_type: str) -> bool:
             logger.debug(
                 f"Testing transcription model {model} with multipart/form-data request to {full_url}"
             )
-            response = requests.post(
+            response = session.post(
                 f"{url}{model_url}",
                 files=ModelType.get_test_payload(model_type),  # multipart/form-data
                 data={"model": model},
@@ -249,7 +316,7 @@ def is_model_healthy(url: str, model: str, model_type: str) -> bool:
                 f"Testing {model_type} model {model} with JSON payload to {full_url}"
             )
             logger.debug(f"Request payload for {model}: {test_payload}")
-            response = requests.post(
+            response = session.post(
                 f"{url}{model_url}",
                 headers={"Content-Type": "application/json"},
                 json=test_payload,
@@ -326,9 +393,12 @@ def fetch_models_list(url: str, timeout: int = 10) -> Optional[list[str]]:
     models_url = f"{url}/v1/models"
     logger.debug(f"Fetching models list from {models_url} (timeout: {timeout}s)")
 
+    # Use shared session with connection pooling
+    session = get_health_check_session()
+
     try:
         logger.debug(f"Sending GET request to {models_url}")
-        response = requests.get(models_url, timeout=timeout)
+        response = session.get(models_url, timeout=timeout)
         logger.debug(
             f"Models endpoint response from {url}: HTTP {response.status_code}"
         )
@@ -388,10 +458,13 @@ def check_attestation_available(url: str, timeout: int = 10) -> bool:
         f"Checking attestation endpoint availability at {attestation_url} (timeout: {timeout}s)"
     )
 
+    # Use shared session with connection pooling
+    session = get_health_check_session()
+
     try:
         logger.debug(f"Sending GET request to attestation endpoint {attestation_url}")
         headers = {"Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}"}
-        response = requests.get(attestation_url, headers=headers, timeout=timeout)
+        response = session.get(attestation_url, headers=headers, timeout=timeout)
         logger.debug(
             f"Attestation endpoint response from {url}: HTTP {response.status_code}"
         )

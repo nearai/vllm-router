@@ -59,6 +59,7 @@ from vllm_router.services.files_service import initialize_storage
 from vllm_router.services.request_service.rewriter import (
     get_request_rewriter,
 )
+from vllm_router.services.request_service.request import ModelThrottler
 from vllm_router.stats.engine_stats import (
     get_engine_stats_scraper,
     initialize_engine_stats_scraper,
@@ -233,6 +234,7 @@ def initialize_all(app: FastAPI, args):
             circuit_breaker_threshold=args.circuit_breaker_threshold,
             circuit_breaker_cooldown_seconds=args.circuit_breaker_cooldown,
             circuit_breaker_max_cooldown_seconds=args.circuit_breaker_max_cooldown,
+            health_check_interval=args.health_check_interval,
         )
     else:
         raise ValueError(f"Invalid service discovery type: {args.service_discovery}")
@@ -288,6 +290,17 @@ def initialize_all(app: FastAPI, args):
     app.state.backend_read_timeout = (
         args.backend_read_timeout if args.backend_read_timeout > 0 else None
     )
+
+    # Initialize model throttler if configured
+    if args.max_concurrent_requests_per_model > 0:
+        app.state.model_throttler = ModelThrottler(
+            max_concurrent_per_model=args.max_concurrent_requests_per_model
+        )
+        logger.info(
+            f"Model throttler enabled: max {args.max_concurrent_requests_per_model} concurrent requests per model"
+        )
+    else:
+        app.state.model_throttler = None
 
     # Initialize backend discovery if enabled
     if args.enable_backend_discovery:
