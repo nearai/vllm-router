@@ -411,6 +411,23 @@ def parse_args():
         help="Maximum time in seconds to wait for in-flight requests to complete during shutdown (default: 30.0)",
     )
 
+    # Backend request timeouts
+    parser.add_argument(
+        "--backend-connect-timeout",
+        type=float,
+        default=5.0,
+        help="Timeout in seconds for establishing a connection to a backend (default: 30.0). "
+        "This is a short timeout to quickly detect dead backends.",
+    )
+    parser.add_argument(
+        "--backend-read-timeout",
+        type=float,
+        default=300.0,
+        help="Timeout in seconds between receiving chunks from a backend (default: 300.0 / 5 minutes). "
+        "For streaming requests, this is the max time allowed between tokens. "
+        "Set to 0 for no read timeout (not recommended).",
+    )
+
     args = parser.parse_args()
     args = load_initial_config_from_config_file_if_required(parser, args)
 

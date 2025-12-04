@@ -88,9 +88,28 @@ class HttpxClientWrapper:
     """
 
     async_client = None
+    # Default timeout values (can be overridden via start())
+    connect_timeout: float = 5.0
+    read_timeout: Optional[float] = 300.0  # 5 minutes between chunks
 
-    def start(self):
-        """Instantiate the client. Call from the FastAPI startup hook."""
+    def start(
+        self,
+        connect_timeout: float = 30.0,
+        read_timeout: Optional[float] = 300.0,
+    ):
+        """
+        Instantiate the client. Call from the FastAPI startup hook.
+
+        Args:
+            connect_timeout: Timeout in seconds for establishing connections.
+                This should be short to quickly detect dead backends.
+            read_timeout: Timeout in seconds between receiving chunks.
+                For streaming LLM requests, this is the max time allowed between tokens.
+                Set to None for no read timeout (not recommended).
+        """
+        self.connect_timeout = connect_timeout
+        self.read_timeout = read_timeout
+
         # Create custom transport with connection logging
         self._transport = httpx.AsyncHTTPTransport(
             http2=True,
@@ -100,12 +119,26 @@ class HttpxClientWrapper:
                 keepalive_expiry=120,  # Keep connections alive for 2 minutes
             ),
         )
+
+        # Configure granular timeouts:
+        # - connect: time to establish TCP connection (short, to detect dead backends)
+        # - read: time between receiving bytes (longer, for slow token generation)
+        # - write: time to send data (generous default)
+        # - pool: time to acquire connection from pool
+        timeout = httpx.Timeout(
+            connect=connect_timeout,
+            read=read_timeout,
+            write=30.0,
+            pool=10.0,
+        )
+
         self.async_client = httpx.AsyncClient(
             transport=self._transport,
-            timeout=httpx.Timeout(None),  # No timeout for streaming requests
+            timeout=timeout,
         )
         logger.info(
             f"httpx AsyncClient instantiated with HTTP/2 support. "
+            f"Timeouts: connect={connect_timeout}s, read={read_timeout}s. "
             f"Id {id(self.async_client)}"
         )
 

@@ -86,7 +86,11 @@ logger = logging.getLogger("uvicorn")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.aiohttp_client_wrapper.start()
-    app.state.httpx_client_wrapper.start()
+    # Start httpx client with configured timeouts
+    app.state.httpx_client_wrapper.start(
+        connect_timeout=getattr(app.state, "backend_connect_timeout", 5.0),
+        read_timeout=getattr(app.state, "backend_read_timeout", 300.0),
+    )
     if hasattr(app.state, "batch_processor"):
         await app.state.batch_processor.initialize()
 
@@ -275,6 +279,12 @@ def initialize_all(app: FastAPI, args):
 
     # Initialize chat cache (maxsize=10000, ttl=1 hour)
     app.state.chat_cache = TTLCache(maxsize=10000, ttl=3600)
+
+    # Store backend timeout configuration for httpx client
+    app.state.backend_connect_timeout = args.backend_connect_timeout
+    app.state.backend_read_timeout = (
+        args.backend_read_timeout if args.backend_read_timeout > 0 else None
+    )
 
     # Initialize backend discovery if enabled
     if args.enable_backend_discovery:

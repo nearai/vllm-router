@@ -118,6 +118,12 @@ async def process_request(
     conn_ids_before = client_wrapper.get_connection_ids()
     pre_backend_time = time.time()
 
+    logger.debug(
+        f"[{request_id}] Connecting to backend {backend_url}{endpoint} "
+        f"(pool_size={len(conn_ids_before)}, connect_timeout={client_wrapper.connect_timeout}s, "
+        f"read_timeout={client_wrapper.read_timeout}s)"
+    )
+
     try:
         async with client.stream(
             method=request.method,
@@ -135,15 +141,15 @@ async def process_request(
             new_connection = len(new_connections) > 0
             if new_connection:
                 logger.debug(
-                    f"[{request_id}] NEW connection to {backend_url}: "
-                    f"TTFB={time_to_response_headers * 1000:.2f}ms "
-                    f"({http_version}, new_conns={len(new_connections)}, total_pool={len(conn_ids_after)})"
+                    f"[{request_id}] Connected to {backend_url} (NEW connection): "
+                    f"connect_time={time_to_response_headers * 1000:.2f}ms, "
+                    f"http_version={http_version}, pool_size={len(conn_ids_after)}"
                 )
             else:
                 logger.debug(
-                    f"[{request_id}] reused connection to {backend_url}: "
-                    f"TTFB={time_to_response_headers * 1000:.2f}ms "
-                    f"({http_version}, pool_size={len(conn_ids_after)})"
+                    f"[{request_id}] Connected to {backend_url} (reused connection): "
+                    f"connect_time={time_to_response_headers * 1000:.2f}ms, "
+                    f"http_version={http_version}, pool_size={len(conn_ids_after)}"
                 )
             # Yield headers and status code first.
             yield dict(backend_response.headers), backend_response.status_code
@@ -186,9 +192,39 @@ async def process_request(
                     full_response.extend(chunk)
                 yield chunk
 
+    except httpx.TimeoutException as e:
+        # Specific handling for timeout errors (connect, read, write, pool)
+        timeout_type = type(e).__name__
+        logger.error(
+            f"[{request_id}] Timeout ({timeout_type}) to backend {backend_url}: {str(e)}"
+        )
+
+        # Mark backend as unhealthy
+        service_discovery = get_service_discovery()
+        if hasattr(service_discovery, "mark_backend_unhealthy_during_request"):
+            model_name = "unknown"
+            try:
+                if body:
+                    request_json = json.loads(body)
+                    model_name = request_json.get("model", "unknown")
+            except:
+                pass
+
+            should_remove = service_discovery.mark_backend_unhealthy_during_request(
+                backend_url, model_name
+            )
+            if should_remove:
+                logger.warning(
+                    f"Backend {backend_url} removed from pool due to timeout ({timeout_type})"
+                )
+
+        raise Exception(f"Backend {backend_url} timed out ({timeout_type}): {str(e)}")
+
     except httpx.RequestError as e:
-        # Connection error, timeout, or other request-level error
-        logger.error(f"Request failed to backend {backend_url}: {str(e)}")
+        # Connection error or other request-level error
+        logger.error(
+            f"[{request_id}] Request failed to backend {backend_url}: {str(e)}"
+        )
 
         # Mark backend as unhealthy
         service_discovery = get_service_discovery()
