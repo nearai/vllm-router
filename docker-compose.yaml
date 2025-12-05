@@ -14,15 +14,22 @@ services:
       - PORT=80
       - ADMIN_TOKEN=admin
       - USER_TOKEN=user
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_KEY=secret123
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:80/health"]
       interval: 10s
       timeout: 10s
       retries: 10
+    volumes:
+      - ./tailscale_status.json:/shared/tailscale_status.json
     command: >
       --routing-logic prefixaware
       --port 80
       --service-discovery static
-      --log-level info
+      --enable-backend-discovery
+      --tailscale-status-file /shared/tailscale_status.json
+      --discovery-interval ${STATUS_UPDATE_INTERVAL:-30}
+      --discovery-port-range 8000-8010
+      --discovery-timeout 2
+      --log-level debug
       --log-format text

@@ -386,7 +386,7 @@ class BackendDiscoveryService:
     async def sync_backends(self, healthy_backends: List[str]) -> None:
         """
         Synchronize backends with the service discovery.
-        Adds new healthy backends and removes backends that are no longer healthy.
+        Adds new healthy backends.
 
         Args:
             healthy_backends: List of currently healthy backend URLs
@@ -427,7 +427,7 @@ class BackendDiscoveryService:
                 logger.debug(f"Backend {backend_url} already discovered, skipping")
 
         logger.info(
-            f"Backend sync completed: {new_backends_added} added, {len(backends_to_remove)} removed, {len(self._discovered_backends)} total tracked"
+            f"Backend sync completed: {new_backends_added} added, {len(self._discovered_backends)} total tracked"
         )
 
     async def discovery_loop(self) -> None:
@@ -443,7 +443,7 @@ class BackendDiscoveryService:
                 # Discover healthy backends
                 healthy_backends = await self.discover_backends()
 
-                # Sync backends: add new ones and remove stale ones
+                # Sync backends: add new ones
                 await self.sync_backends(healthy_backends)
 
                 logger.info(

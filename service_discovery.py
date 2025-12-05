@@ -463,6 +463,30 @@ class StaticServiceDiscovery(ServiceDiscovery):
     async def add_backend(self, url: str):
         logger.info(f"add_backend called with url: {url}")
         try:
+            logger.debug(
+                f"creating aiohttp session to fetch models from {url}/v1/models"
+            )
+            models_data = []
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{url}/v1/models") as response:
+                    logger.debug(
+                        f"received response from {url}/v1/models with status: {response.status}"
+                    )
+                    if response.status != 200:
+                        logger.error(
+                            f"failed to fetch models from {url}: HTTP {response.status}"
+                        )
+                        return
+
+                    data = await response.json()
+                    models_data = data.get("data", [])
+                    logger.info(
+                        f"fetched {len(models_data)} models from {url}: {[m.get('id') for m in models_data]}"
+                    )
+            if not models_data:
+                logger.error(f"no models found at {url}/v1/models")
+                return
+
             with self._lock:
                 logger.debug(f"acquired lock, current backends count: {len(self.urls)}")
                 logger.debug(f"current backends: {list(zip(self.urls, self.models))}")
