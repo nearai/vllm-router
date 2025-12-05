@@ -344,9 +344,9 @@ class StaticServiceDiscovery(ServiceDiscovery):
 
         # Validate that if both are provided, they have the same length
         if urls and models:
-            assert len(urls) == len(models), (
-                "URLs and models should have the same length"
-            )
+            assert len(urls) == len(
+                models
+            ), "URLs and models should have the same length"
         elif urls and not models:
             raise ValueError("Models must be provided when URLs are specified")
         elif models and not urls:
@@ -463,26 +463,6 @@ class StaticServiceDiscovery(ServiceDiscovery):
     async def add_backend(self, url: str):
         logger.info(f"add_backend called with url: {url}")
         try:
-            logger.debug(
-                f"creating aiohttp session to fetch models from {url}/v1/models"
-            )
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"{url}/v1/models") as response:
-                    logger.debug(
-                        f"received response from {url}/v1/models with status: {response.status}"
-                    )
-                    if response.status != 200:
-                        logger.error(
-                            f"failed to fetch models from {url}: HTTP {response.status}"
-                        )
-                        return
-
-                    data = await response.json()
-                    models_data = data.get("data", [])
-                    logger.info(
-                        f"fetched {len(models_data)} models from {url}: {[m.get('id') for m in models_data]}"
-                    )
-
             with self._lock:
                 logger.debug(f"acquired lock, current backends count: {len(self.urls)}")
                 logger.debug(f"current backends: {list(zip(self.urls, self.models))}")
@@ -602,7 +582,9 @@ class StaticServiceDiscovery(ServiceDiscovery):
 
         # Check 2: Models endpoint availability
         if self.health_check_include_models_endpoint:
-            models_list = utils.fetch_models_list(url, self.backend_health_check_timeout)
+            models_list = utils.fetch_models_list(
+                url, self.backend_health_check_timeout
+            )
             models_available = models_list is not None
             health_check_results.append(("models_endpoint", models_available))
             if not models_available:
@@ -697,9 +679,7 @@ class StaticServiceDiscovery(ServiceDiscovery):
                                 backends_to_remove.append(url)
 
                     except Exception as e:
-                        logger.error(
-                            f"Error checking health of {model} at {url}: {e}"
-                        )
+                        logger.error(f"Error checking health of {model} at {url}: {e}")
 
         except ValueError:
             logger.error(

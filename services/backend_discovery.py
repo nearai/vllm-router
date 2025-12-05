@@ -405,27 +405,6 @@ class BackendDiscoveryService:
 
         healthy_set = set(healthy_backends)
 
-        # Find backends to remove (previously discovered but no longer healthy)
-        backends_to_remove = self._discovered_backends - healthy_set
-        if backends_to_remove:
-            logger.info(
-                f"Removing {len(backends_to_remove)} stale backends: {backends_to_remove}"
-            )
-            for backend_url in backends_to_remove:
-                try:
-                    logger.info(f"Removing stale backend: {backend_url}")
-                    service_discovery.remove_backend(backend_url)
-                    self._discovered_backends.discard(backend_url)
-                    logger.debug(
-                        f"Successfully removed backend {backend_url} from service discovery"
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to remove backend {backend_url}: {e}")
-                    logger.debug(
-                        f"Error details for backend {backend_url}: {type(e).__name__}: {e}",
-                        exc_info=True,
-                    )
-
         # Add new healthy backends
         new_backends_added = 0
         for backend_url in healthy_backends:
