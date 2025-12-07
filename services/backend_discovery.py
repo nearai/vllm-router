@@ -38,9 +38,6 @@ class BackendDiscoveryService:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
 
-        # Track discovered backends to avoid duplicate additions
-        self._discovered_backends: Set[str] = set()
-
     def _parse_port_range(self, port_range: str) -> range:
         """Parse port range string like '8000-8010' into a range object."""
         match = re.match(r"^(\d+)-(\d+)$", port_range)
@@ -399,36 +396,22 @@ class BackendDiscoveryService:
             logger.error("Service discovery not initialized - cannot sync backends")
             return
 
-        logger.debug(
-            f"Service discovery available, currently tracking {len(self._discovered_backends)} backends"
-        )
-
         healthy_set = set(healthy_backends)
 
         # Add new healthy backends
-        new_backends_added = 0
         for backend_url in healthy_backends:
-            if backend_url not in self._discovered_backends:
-                try:
-                    logger.info(f"Adding newly discovered backend: {backend_url}")
-                    await service_discovery.add_backend(backend_url)
-                    self._discovered_backends.add(backend_url)
-                    new_backends_added += 1
-                    logger.debug(
-                        f"Successfully added backend {backend_url} to service discovery"
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to add backend {backend_url}: {e}")
-                    logger.debug(
-                        f"Error details for backend {backend_url}: {type(e).__name__}: {e}",
-                        exc_info=True,
-                    )
-            else:
-                logger.debug(f"Backend {backend_url} already discovered, skipping")
-
-        logger.info(
-            f"Backend sync completed: {new_backends_added} added, {len(self._discovered_backends)} total tracked"
-        )
+            try:
+                logger.info(f"Adding  backend: {backend_url}")
+                await service_discovery.add_backend(backend_url)
+                logger.debug(
+                    f"Successfully added backend {backend_url} to service discovery"
+                )
+            except Exception as e:
+                logger.error(f"Failed to add backend {backend_url}: {e}")
+                logger.debug(
+                    f"Error details for backend {backend_url}: {type(e).__name__}: {e}",
+                    exc_info=True,
+                )
 
     async def discovery_loop(self) -> None:
         """Main discovery loop that runs periodically."""
