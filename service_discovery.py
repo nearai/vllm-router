@@ -536,7 +536,7 @@ class StaticServiceDiscovery(ServiceDiscovery):
                         logger.debug(f"appended default model_label for {model_id}")
 
                     if self.model_types is not None:
-                        self.model_types.append("default")
+                        self.model_types.append("chat")
                         logger.debug(f"appended default model_type for {model_id}")
 
                     logger.info(

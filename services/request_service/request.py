@@ -710,12 +710,6 @@ async def _route_request_internal(
                 logger.info(
                     f"Will retry request {request_id}, tried backends: {tried_urls}"
                 )
-            else:
-                # Not a backend failure, don't retry
-                logger.error(
-                    f"Non-recoverable error for request {request_id}: {error_msg}"
-                )
-                break
 
     # If we get here, all retries failed
     logger.error(
