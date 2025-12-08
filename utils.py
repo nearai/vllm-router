@@ -80,6 +80,7 @@ def close_health_check_session() -> None:
             _health_check_session = None
             logger.info("Health check session closed")
 
+
 # prepare a WAV byte to prevent repeatedly generating it
 # Generate a 0.1 second silent audio file
 # This will be used for the /v1/audio/transcriptions endpoint
@@ -318,7 +319,10 @@ def is_model_healthy(url: str, model: str, model_type: str) -> bool:
             logger.debug(f"Request payload for {model}: {test_payload}")
             response = session.post(
                 f"{url}{model_url}",
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}",
+                },
                 json=test_payload,
                 timeout=10,
             )
