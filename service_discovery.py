@@ -341,6 +341,8 @@ class StaticServiceDiscovery(ServiceDiscovery):
             urls = []
         if models is None:
             models = []
+        if model_types is None:
+            model_types = []
 
         # Validate that if both are provided, they have the same length
         if urls and models:
@@ -731,6 +733,10 @@ class StaticServiceDiscovery(ServiceDiscovery):
     async def check_model_health(self):
         while self._running:
             try:
+                if len(self.urls) == 0:
+                    logger.warning("No backends found, skipping health check")
+                    await asyncio.sleep(self.health_check_interval)
+                    continue
                 self.unhealthy_endpoint_hashes = self.get_unhealthy_endpoint_hashes()
                 await asyncio.sleep(self.health_check_interval)
             except asyncio.CancelledError:
