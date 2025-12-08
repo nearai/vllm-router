@@ -389,8 +389,7 @@ class StaticServiceDiscovery(ServiceDiscovery):
             f"max_concurrent={health_check_max_concurrent}"
         )
 
-        if static_backend_health_checks and urls:
-            self.start_health_check_task()
+        self.start_health_check_task()
         self.prefill_model_labels = prefill_model_labels
         self.decode_model_labels = decode_model_labels
 
