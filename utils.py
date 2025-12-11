@@ -6,6 +6,7 @@ import json
 import re
 import resource
 import threading
+import time
 import wave
 from typing import Optional
 
@@ -317,15 +318,48 @@ def is_model_healthy(url: str, model: str, model_type: str) -> bool:
                 f"Testing {model_type} model {model} with JSON payload to {full_url}"
             )
             logger.debug(f"Request payload for {model}: {test_payload}")
-            response = session.post(
-                f"{url}{model_url}",
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}",
-                },
-                json=test_payload,
-                timeout=10,
-            )
+
+            # Retry logic: up to 3 attempts with at least 1 second between requests
+            max_retries = 3
+            last_exception = None
+            response = None
+
+            for attempt in range(1, max_retries + 1):
+                try:
+                    request_start_time = time.time()
+                    logger.debug(
+                        f"Attempt {attempt}/{max_retries} for {model} at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(request_start_time))}"
+                    )
+
+                    response = session.post(
+                        f"{url}{model_url}",
+                        headers={
+                            "Content-Type": "application/json",
+                            "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}",
+                        },
+                        json=test_payload,
+                        timeout=60,
+                    )
+
+                    # If successful, break out of retry loop
+                    break
+                except Exception as e:
+                    last_exception = e
+                    logger.warning(
+                        f"Attempt {attempt}/{max_retries} failed for {model}: {e}"
+                    )
+
+                    # If not the last attempt, wait at least 1 second before retrying
+                    if attempt < max_retries:
+                        elapsed = time.time() - request_start_time
+                        wait_time = max(1.0 - elapsed, 0)
+                        if wait_time > 0:
+                            logger.debug(f"Waiting {wait_time:.2f}s before retry")
+                            time.sleep(wait_time)
+                    else:
+                        # Last attempt failed, re-raise the exception
+                        logger.error(f"All {max_retries} attempts failed for {model}")
+                        raise
 
         logger.debug(
             f"Health check response for {model} at {full_url}: HTTP {response.status_code}"
@@ -351,33 +385,31 @@ def is_model_healthy(url: str, model: str, model_type: str) -> bool:
             return True  # validation passed
 
     except requests.exceptions.Timeout as e:
-        logger.debug(f"{model_type} Model {model} at {url} health check TIMEOUT: {e}")
+        logger.info(f"{model_type} Model {model} at {url} health check TIMEOUT: {e}")
         return False
     except requests.exceptions.ConnectionError as e:
-        logger.debug(
+        logger.info(
             f"{model_type} Model {model} at {url} health check CONNECTION ERROR: {e}"
         )
         return False
     except requests.exceptions.HTTPError as e:
-        logger.debug(
-            f"{model_type} Model {model} at {url} health check HTTP ERROR: {e}"
-        )
-        logger.debug(
+        logger.info(f"{model_type} Model {model} at {url} health check HTTP ERROR: {e}")
+        logger.info(
             f"Response content for {model}: {e.response.text if e.response else 'No response'}"
         )
         return False
     except requests.exceptions.RequestException as e:
-        logger.debug(
+        logger.info(
             f"{model_type} Model {model} at {url} health check REQUEST ERROR: {e}"
         )
         return False
     except json.JSONDecodeError as e:
-        logger.debug(
+        logger.info(
             f"{model_type} Model {model} at {url} health check JSON DECODE ERROR: {e}"
         )
         return False
     except Exception as e:
-        logger.debug(
+        logger.info(
             f"{model_type} Model {model} at {url} health check UNEXPECTED ERROR: {type(e).__name__}: {e}"
         )
         return False
@@ -402,7 +434,41 @@ def fetch_models_list(url: str, timeout: int = 10) -> Optional[list[str]]:
 
     try:
         logger.debug(f"Sending GET request to {models_url}")
-        response = session.get(models_url, timeout=timeout)
+
+        # Retry logic: up to 3 attempts with at least 1 second between requests
+        max_retries = 3
+        last_exception = None
+        response = None
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                request_start_time = time.time()
+                logger.debug(
+                    f"Attempt {attempt}/{max_retries} for models endpoint at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(request_start_time))}"
+                )
+
+                response = session.get(models_url, timeout=timeout)
+
+                # If successful, break out of retry loop
+                break
+            except Exception as e:
+                last_exception = e
+                logger.warning(
+                    f"Attempt {attempt}/{max_retries} failed for {models_url}: {e}"
+                )
+
+                # If not the last attempt, wait at least 1 second before retrying
+                if attempt < max_retries:
+                    elapsed = time.time() - request_start_time
+                    wait_time = max(1.0 - elapsed, 0)
+                    if wait_time > 0:
+                        logger.debug(f"Waiting {wait_time:.2f}s before retry")
+                        time.sleep(wait_time)
+                else:
+                    # Last attempt failed, re-raise the exception
+                    logger.error(f"All {max_retries} attempts failed for {models_url}")
+                    raise
+
         logger.debug(
             f"Models endpoint response from {url}: HTTP {response.status_code}"
         )
@@ -468,7 +534,45 @@ def check_attestation_available(url: str, timeout: int = 10) -> bool:
     try:
         logger.debug(f"Sending GET request to attestation endpoint {attestation_url}")
         headers = {"Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}"}
-        response = session.get(attestation_url, headers=headers, timeout=timeout)
+
+        # Retry logic: up to 3 attempts with at least 1 second between requests
+        max_retries = 3
+        last_exception = None
+        response = None
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                request_start_time = time.time()
+                logger.debug(
+                    f"Attempt {attempt}/{max_retries} for attestation endpoint at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(request_start_time))}"
+                )
+
+                response = session.get(
+                    attestation_url, headers=headers, timeout=timeout
+                )
+
+                # If successful, break out of retry loop
+                break
+            except Exception as e:
+                last_exception = e
+                logger.warning(
+                    f"Attempt {attempt}/{max_retries} failed for {attestation_url}: {e}"
+                )
+
+                # If not the last attempt, wait at least 1 second before retrying
+                if attempt < max_retries:
+                    elapsed = time.time() - request_start_time
+                    wait_time = max(1.0 - elapsed, 0)
+                    if wait_time > 0:
+                        logger.debug(f"Waiting {wait_time:.2f}s before retry")
+                        time.sleep(wait_time)
+                else:
+                    # Last attempt failed, re-raise the exception
+                    logger.error(
+                        f"All {max_retries} attempts failed for {attestation_url}"
+                    )
+                    raise
+
         logger.debug(
             f"Attestation endpoint response from {url}: HTTP {response.status_code}"
         )
