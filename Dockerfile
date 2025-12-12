@@ -1,13 +1,7 @@
-FROM python:3.13-slim
+FROM python:3.13-slim@sha256:a93b51c5acbd72f9d28fd811a230c67ed59bcd727ac08774dee4bbf64b7630c7
 
 # Install dependencies
 WORKDIR /tmp
-# Install build dependencies for packages that don't have wheels for this python version
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    gcc \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --upgrade -r requirements.txt \
