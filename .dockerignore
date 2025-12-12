@@ -1,4 +1,5 @@
 .git
+.github
 .gitignore
 __pycache__
 *.pyc
@@ -8,12 +9,12 @@ venv
 Dockerfile
 build-image.sh
 oci.tar
-.GIT_REV
-test-reproducibility.sh
-investigate-reproducibility.sh
-REPRODUCIBILITY.md
-quick-test.sh
-debug-layers.sh
+*.sh
+*.md
 *.tar
 .ruff_cache
 .python-version
+pyproject.toml
+*.http
+docker-compose.yaml
+uv.lock
